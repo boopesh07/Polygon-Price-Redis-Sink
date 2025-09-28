@@ -1,0 +1,125 @@
+{
+    "family": "polygon-hot-cold-sink",
+    "networkMode": "awsvpc",
+    "cpu": "256",
+    "memory": "512",
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/etl-pipeline-execution-role",
+    "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/etl-pipeline-task-role",
+    "containerDefinitions": [
+        {
+            "name": "polygon-redis-sink",
+            "cpu": 256,
+            "memory": 512,
+            "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/polygon-hot-cold-sink:latest",
+            "essential": true,
+            "portMappings": [],
+            "environment": [
+                {
+                    "name": "POLYGON_API_KEY",
+                    "value": "<POLYGON_API_KEY>"
+                },
+                {
+                    "name": "S3_ENABLED",
+                    "value": "<S3_ENABLED>"
+                },
+                {
+                    "name": "S3_BUCKET",
+                    "value": "<S3_BUCKET>"
+                },
+                {
+                    "name": "S3_PREFIX",
+                    "value": "<S3_PREFIX>"
+                },
+                {
+                    "name": "AWS_REGION",
+                    "value": "<AWS_REGION>"
+                },
+                {
+                    "name": "S3_WINDOW_MINUTES",
+                    "value": "30"
+                },
+                {
+                    "name": "S3_MAX_OBJECT_BYTES",
+                    "value": "512000000"
+                },
+                {
+                    "name": "S3_PART_SIZE_BYTES",
+                    "value": "16777216"
+                },
+                {
+                    "name": "S3_USE_MARKER",
+                    "value": "true"
+                },
+                {
+                    "name": "REDIS_URL",
+                    "value": "<REDIS_URL>"
+                },
+                {
+                    "name": "REDIS_TOKEN",
+                    "value": "<REDIS_TOKEN>"
+                },
+                {
+                    "name": "POLYGON_WS_HOST_REALTIME",
+                    "value": "wss://business.polygon.io"
+                },
+                {
+                    "name": "POLYGON_WS_HOST_DELAYED",
+                    "value": "wss://delayed-business.polygon.io"
+                },
+                {
+                    "name": "POLYGON_WS_SYMBOLS",
+                    "value": "AAPL,MSFT,TSLA"
+                },
+                {
+                    "name": "WS_DEBUG",
+                    "value": "<WS_DEBUG>"
+                },
+                {
+                    "name": "WS_HEALTH_INTERVAL_SEC",
+                    "value": "30"
+                },
+                {
+                    "name": "AGG1M_TTL_SEC",
+                    "value": "120"
+                },
+                {
+                    "name": "FMV_TTL_SEC",
+                    "value": "60"
+                },
+                {
+                    "name": "TRADE_TTL_SEC",
+                    "value": "60"
+                },
+                {
+                    "name": "QUOTE_TTL_SEC",
+                    "value": "60"
+                },
+                {
+                    "name": "POLYGON_DISCOVER_TICKERS",
+                    "value": "<POLYGON_DISCOVER_TICKERS>"
+                },
+                {
+                    "name": "POLYGON_TICKER_LIMIT",
+                    "value": "<POLYGON_TICKER_LIMIT>"
+                },
+                {
+                    "name": "POLYGON_SUBSCRIBE_BATCH",
+                    "value": "<POLYGON_SUBSCRIBE_BATCH>"
+                }
+            ],
+            "secrets": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/etl-pipeline-logs",
+                    "awslogs-region": "<REGION>",
+                    "awslogs-stream-prefix": "ecs",
+                    "awslogs-create-group": "true"
+                }
+            }
+        }
+    ]
+}
