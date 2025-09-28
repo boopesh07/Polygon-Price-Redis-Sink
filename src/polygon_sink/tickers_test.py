@@ -20,9 +20,10 @@ async def main() -> None:
     elapsed = time.time() - started
 
     print(f"tickers_test: PASS count={len(symbols)} elapsed_sec={elapsed:.2f}")
-    # Print a small sample for manual inspection
-    preview = symbols[:10]
-    print(f"sample_first_10={preview}")
+    if "MGN" in symbols:
+        print("Ticker 'MGN' was found.")
+    else:
+        print("Ticker 'MGN' was not found.")
 
 
 if __name__ == "__main__":
