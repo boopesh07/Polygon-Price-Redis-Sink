@@ -39,6 +39,10 @@ Optional
 - BACKOFF_INITIAL_MS: Initial backoff for WebSocket reconnect (default 1000)
 - BACKOFF_FACTOR: Backoff factor for WebSocket reconnect (default 2.0)
 - BACKOFF_MAX_MS: Maximum backoff for WebSocket reconnect (default 30000)
+- AGG5M_FLUSH_INTERVAL_SEC: Flush cadence for 5-minute snapshots (default 900)
+- AGG5M_TTL_SEC: TTL for stock:agg5m keys (default 172800)
+- AGG5M_TIMEZONE: Timezone for day boundaries (default America/New_York)
+- AGG5M_MAX_BARS: Maximum 5-minute buckets stored per day (default 120)
 
 S3 Cold Path (optional)
 
@@ -84,6 +88,15 @@ Redis Key Schema and Contracts
     "volume": 21834,
     "vwap": 192.1,
     "updatedAt": "2025-05-07T15:04:05.000Z"
+  }
+- stock:agg5m:{SYMBOL} (TTL default 172800s)
+  {
+    "day": "2025-05-07",
+    "bars": [
+      { "ts": 1715099400000, "close": 192.30 },
+      { "ts": 1715099700000, "close": 192.45 },
+      { "ts": 1715100000000, "close": 192.55 }
+    ]
   }
 
 - stock:fmv:{SYMBOL} (TTL default 60s)
@@ -193,5 +206,4 @@ S3 layout and Athena
     'projection.hour.digits'='2',
     'storage.location.template'='s3://S3_BUCKET/S3_PREFIX/channel=T/ingest_dt=${ingest_dt}/hour=${hour}/'
   );
-
 

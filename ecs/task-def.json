@@ -98,6 +98,22 @@
                     "value": "60"
                 },
                 {
+                    "name": "AGG5M_FLUSH_INTERVAL_SEC",
+                    "value": "<AGG5M_FLUSH_INTERVAL_SEC>"
+                },
+                {
+                    "name": "AGG5M_TTL_SEC",
+                    "value": "<AGG5M_TTL_SEC>"
+                },
+                {
+                    "name": "AGG5M_TIMEZONE",
+                    "value": "<AGG5M_TIMEZONE>"
+                },
+                {
+                    "name": "AGG5M_MAX_BARS",
+                    "value": "<AGG5M_MAX_BARS>"
+                },
+                {
                     "name": "POLYGON_DISCOVER_TICKERS",
                     "value": "<POLYGON_DISCOVER_TICKERS>"
                 },

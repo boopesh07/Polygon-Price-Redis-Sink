@@ -7,6 +7,10 @@ set -a
 set +a
 
 export AWS_DEFAULT_REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}
+: "${AGG5M_FLUSH_INTERVAL_SEC:=900}"
+: "${AGG5M_TTL_SEC:=172800}"
+: "${AGG5M_TIMEZONE:=America/New_York}"
+: "${AGG5M_MAX_BARS:=120}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker not found. Please install/start Docker Desktop." >&2
@@ -63,5 +67,4 @@ docker buildx build \
   .
 
 echo "Build and push complete: $IMAGE_URI"
-
 
