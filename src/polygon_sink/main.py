@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
 from .redis_sink import build_sink
+from .agg5m import Agg5mCollector
 from .ws_client import PolygonWsClient
 from .tickers import fetch_all_active_stock_tickers
 
@@ -94,6 +95,14 @@ async def _main_async() -> None:
     )
 
     sink = build_sink(settings)
+    agg5m_collector = Agg5mCollector(
+        sink,
+        flush_interval_sec=settings.agg5m_flush_interval_sec,
+        ttl_sec=settings.agg5m_ttl_sec,
+        timezone_name=settings.agg5m_timezone,
+        max_bars=settings.agg5m_max_bars,
+    )
+    agg5m_collector.start()
     ok = await sink.ping()
     logger.info("redis_health", ok=ok)
     # Startup write/read validation; exit if it fails
@@ -106,11 +115,15 @@ async def _main_async() -> None:
     clients = []
     # Real-time (business) host: AM + FMV
     rt_url = settings.normalized_ws_url_for("AM")
-    clients.append(PolygonWsClient(settings, sink, channels=["AM", "FMV"], host_override=rt_url, symbols_override=all_symbols))
+    clients.append(
+        PolygonWsClient(settings, sink, channels=["AM", "FMV"], host_override=rt_url, symbols_override=all_symbols, agg5m_collector=agg5m_collector)
+    )
 
     # Delayed (delayed-business) host: T + Q
     delayed_url = settings.normalized_ws_url_for("T")
-    clients.append(PolygonWsClient(settings, sink, channels=["T", "Q"], host_override=delayed_url, symbols_override=all_symbols))
+    clients.append(
+        PolygonWsClient(settings, sink, channels=["T", "Q"], host_override=delayed_url, symbols_override=all_symbols, agg5m_collector=agg5m_collector)
+    )
 
     stop_event = asyncio.Event()
 
@@ -135,6 +148,7 @@ async def _main_async() -> None:
         t.cancel()
         with contextlib.suppress(Exception):
             await t
+    await agg5m_collector.close()
     await sink.close()
     logger.info("stopped_polygon_sink")
 
@@ -150,5 +164,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

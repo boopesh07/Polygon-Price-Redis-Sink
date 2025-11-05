@@ -10,13 +10,22 @@ from websockets.client import WebSocketClientProtocol
 from .config import Settings, mask_api_key
 from .logging_setup import get_logger
 from .redis_sink import BaseSink
+from .agg5m import Agg5mCollector
 
 
 logger = get_logger()
 
 
 class PolygonWsClient:
-    def __init__(self, settings: Settings, sink: BaseSink, channels: Optional[List[str]] = None, host_override: Optional[str] = None, symbols_override: Optional[List[str]] = None):
+    def __init__(
+        self,
+        settings: Settings,
+        sink: BaseSink,
+        channels: Optional[List[str]] = None,
+        host_override: Optional[str] = None,
+        symbols_override: Optional[List[str]] = None,
+        agg5m_collector: Optional[Agg5mCollector] = None,
+    ):
         self._settings = settings
         self._sink = sink
         self._stop_event = asyncio.Event()
@@ -27,6 +36,7 @@ class PolygonWsClient:
         self._channels = [c.upper() for c in (channels or ["T", "AM"])]
         self._host_override = host_override
         self._symbols = [s.upper() for s in (symbols_override if symbols_override is not None else settings.symbols)]
+        self._agg5m = agg5m_collector
 
     def _debug_log(self, direction: str, raw: str) -> None:
         if self._debug:
@@ -186,6 +196,8 @@ class PolygonWsClient:
                 "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             }
             await self._sink.set_latest_agg1m(sym, bar)
+            if self._agg5m:
+                await self._agg5m.on_minute_bar(sym, bar)
             if hasattr(self._sink, "write_raw_event"):
                 try:
                     await getattr(self._sink, "write_raw_event")("AM", sym, evt)
@@ -244,5 +256,4 @@ class PolygonWsClient:
             "tradesPerSymbol": trades,
             "aggsPerSymbol": aggs,
         }
-
 

@@ -51,6 +51,9 @@ class BaseSink:
     async def set_fmv(self, symbol: str, payload: Dict[str, Any]) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    async def set_agg5m_snapshot(self, symbol: str, day: str, entries: List[Dict[str, Any]], ttl: Optional[int] = None) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
     async def ping(self) -> bool:  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -97,6 +100,13 @@ class MultiSink(BaseSink):
                 await s.set_fmv(symbol, payload)
             except Exception as exc:  # noqa: BLE001
                 logger.error("sink_error", action="set_fmv", error=str(exc))
+
+    async def set_agg5m_snapshot(self, symbol: str, day: str, entries: List[Dict[str, Any]], ttl: Optional[int] = None) -> None:
+        for s in self._sinks:
+            try:
+                await s.set_agg5m_snapshot(symbol, day, entries, ttl)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("sink_error", action="set_agg5m_snapshot", error=str(exc))
 
     async def write_raw_event(self, channel: str, symbol: str, raw_event: Dict[str, Any]) -> None:
         if not self._s3_raw:
@@ -172,6 +182,13 @@ class StandardRedisSink(BaseSink):
             logger.info("redis_write", key=key, size=len(value), preview=value[:200])
         await self._client.set(key, value)
 
+    async def set_agg5m_snapshot(self, symbol: str, day: str, entries: List[Dict[str, Any]], ttl: Optional[int] = None) -> None:
+        key = f"stock:agg5m:{symbol}"
+        value = json.dumps({"day": day, "bars": entries})
+        if self._debug:
+            logger.info("redis_write", key=key, size=len(value), preview=value[:200])
+        await self._client.set(key, value, ex=ttl)
+
     async def ping(self) -> bool:
         try:
             pong = await self._client.ping()
@@ -237,6 +254,16 @@ class UpstashRestSink(BaseSink):
             logger.info("redis_write", key=key, size=len(value), preview=value[:200])
         await self._command("SET", key, value)
 
+    async def set_agg5m_snapshot(self, symbol: str, day: str, entries: List[Dict[str, Any]], ttl: Optional[int] = None) -> None:
+        key = f"stock:agg5m:{symbol}"
+        value = json.dumps({"day": day, "bars": entries})
+        if self._debug:
+            logger.info("redis_write", key=key, size=len(value), preview=value[:200])
+        if ttl and ttl > 0:
+            await self._command("SET", key, value, "EX", str(ttl))
+        else:
+            await self._command("SET", key, value)
+
     async def ping(self) -> bool:
         try:
             resp = await self._command("PING")
@@ -283,6 +310,5 @@ def build_sink(settings: Settings) -> BaseSink:
         return MultiSink([primary], s3_raw=s3_raw)
 
     return primary
-
 
 

@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     s3_part_size_bytes: int = Field(16_777_216, alias="S3_PART_SIZE_BYTES")
     s3_use_marker: bool = Field(True, alias="S3_USE_MARKER")
 
+    # 5-minute aggregate settings
+    agg5m_flush_interval_sec: int = Field(900, alias="AGG5M_FLUSH_INTERVAL_SEC")
+    agg5m_ttl_sec: int = Field(172_800, alias="AGG5M_TTL_SEC")
+    agg5m_timezone: str = Field("America/New_York", alias="AGG5M_TIMEZONE")
+    agg5m_max_bars: int = Field(120, alias="AGG5M_MAX_BARS")
+
     @property
     def symbols(self) -> List[str]:
         raw = self.polygon_ws_symbols or ""
@@ -58,6 +64,10 @@ class Settings(BaseSettings):
     def _validate_hosts(self):
         if not self.polygon_ws_host_realtime or not self.polygon_ws_host_delayed:
             raise ValueError("POLYGON_WS_HOST_REALTIME and POLYGON_WS_HOST_DELAYED are required")
+        if self.agg5m_flush_interval_sec <= 0:
+            raise ValueError("AGG5M_FLUSH_INTERVAL_SEC must be > 0")
+        if self.agg5m_max_bars <= 0:
+            raise ValueError("AGG5M_MAX_BARS must be > 0")
         return self
 
 
@@ -67,5 +77,3 @@ def mask_api_key(key: str) -> str:
     if len(key) <= 6:
         return "***"
     return f"{key[:3]}***{key[-3:]}"
-
-
