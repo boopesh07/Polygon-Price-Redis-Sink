@@ -35,6 +35,10 @@ def _fmv_key(symbol: str) -> str:
     return f"stock:fmv:{symbol}"
 
 
+def _prev_close_key(symbol: str) -> str:
+    return f"stock:prev_close:{symbol}"
+
+
 class BaseSink:
     async def set_latest_price(self, symbol: str, payload: Dict[str, Any]) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -49,6 +53,12 @@ class BaseSink:
         raise NotImplementedError
 
     async def set_fmv(self, symbol: str, payload: Dict[str, Any]) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    async def set_prev_close(self, symbol: str, price: float, ttl: Optional[int] = None) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    async def get_prev_close(self, symbol: str) -> Optional[float]:  # pragma: no cover - interface
         raise NotImplementedError
 
     async def set_agg5m_snapshot(self, symbol: str, day: str, entries: List[Dict[str, Any]], ttl: Optional[int] = None) -> None:  # pragma: no cover - interface
@@ -107,6 +117,23 @@ class MultiSink(BaseSink):
                 await s.set_agg5m_snapshot(symbol, day, entries, ttl)
             except Exception as exc:  # noqa: BLE001
                 logger.error("sink_error", action="set_agg5m_snapshot", error=str(exc))
+
+    async def set_prev_close(self, symbol: str, price: float, ttl: Optional[int] = None) -> None:
+        for s in self._sinks:
+            try:
+                await s.set_prev_close(symbol, price, ttl)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("sink_error", action="set_prev_close", error=str(exc))
+
+    async def get_prev_close(self, symbol: str) -> Optional[float]:
+        for s in self._sinks:
+            try:
+                val = await s.get_prev_close(symbol)
+                if val is not None:
+                    return val
+            except Exception as exc:  # noqa: BLE001
+                logger.error("sink_error", action="get_prev_close", error=str(exc))
+        return None
 
     async def write_raw_event(self, channel: str, symbol: str, raw_event: Dict[str, Any]) -> None:
         if not self._s3_raw:
@@ -189,6 +216,27 @@ class StandardRedisSink(BaseSink):
             logger.info("redis_write", key=key, size=len(value), preview=value[:200])
         await self._client.set(key, value, ex=ttl)
 
+    async def set_prev_close(self, symbol: str, price: float, ttl: Optional[int] = None) -> None:
+        key = _prev_close_key(symbol)
+        value = f"{float(price):.6f}"
+        if self._debug:
+            logger.info("redis_write", key=key, value=value, ttl=ttl)
+        await self._client.set(key, value, ex=ttl)
+
+    async def get_prev_close(self, symbol: str) -> Optional[float]:
+        key = _prev_close_key(symbol)
+        try:
+            value = await self._client.get(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("redis_get_prev_close_error", key=key, error=str(exc))
+            return None
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     async def ping(self) -> bool:
         try:
             pong = await self._client.ping()
@@ -264,6 +312,29 @@ class UpstashRestSink(BaseSink):
         else:
             await self._command("SET", key, value)
 
+    async def set_prev_close(self, symbol: str, price: float, ttl: Optional[int] = None) -> None:
+        key = _prev_close_key(symbol)
+        value = f"{float(price):.6f}"
+        if self._debug:
+            logger.info("redis_write", key=key, value=value, ttl=ttl)
+        if ttl and ttl > 0:
+            await self._command("SET", key, value, "EX", str(ttl))
+        else:
+            await self._command("SET", key, value)
+
+    async def get_prev_close(self, symbol: str) -> Optional[float]:
+        key = _prev_close_key(symbol)
+        try:
+            resp = await self._command("GET", key)
+            data = resp.json()
+            result = data.get("result")
+            if result is None:
+                return None
+            return float(result)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("upstash_prev_close_error", key=key, error=str(exc))
+            return None
+
     async def ping(self) -> bool:
         try:
             resp = await self._command("PING")
@@ -310,5 +381,4 @@ def build_sink(settings: Settings) -> BaseSink:
         return MultiSink([primary], s3_raw=s3_raw)
 
     return primary
-
 

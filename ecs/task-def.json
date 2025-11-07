@@ -2,7 +2,7 @@
     "family": "polygon-hot-cold-sink",
     "networkMode": "awsvpc",
     "cpu": "256",
-    "memory": "512",
+    "memory": "1024",
     "requiresCompatibilities": [
         "FARGATE"
     ],
@@ -12,7 +12,7 @@
         {
             "name": "polygon-redis-sink",
             "cpu": 256,
-            "memory": 512,
+            "memory": 1024,
             "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/polygon-hot-cold-sink:latest",
             "essential": true,
             "portMappings": [],
@@ -112,6 +112,22 @@
                 {
                     "name": "AGG5M_MAX_BARS",
                     "value": "<AGG5M_MAX_BARS>"
+                },
+                {
+                    "name": "QUOTE_PL_TIMEZONE",
+                    "value": "<QUOTE_PL_TIMEZONE>"
+                },
+                {
+                    "name": "QUOTE_PL_MARKET_CLOSE_HOUR",
+                    "value": "<QUOTE_PL_MARKET_CLOSE_HOUR>"
+                },
+                {
+                    "name": "QUOTE_PL_MARKET_CLOSE_MINUTE",
+                    "value": "<QUOTE_PL_MARKET_CLOSE_MINUTE>"
+                },
+                {
+                    "name": "QUOTE_PREV_CLOSE_TTL_SEC",
+                    "value": "<QUOTE_PREV_CLOSE_TTL_SEC>"
                 },
                 {
                     "name": "POLYGON_DISCOVER_TICKERS",

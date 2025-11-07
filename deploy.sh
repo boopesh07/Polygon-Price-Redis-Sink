@@ -33,6 +33,10 @@ sed -e "s|<ACCOUNT_ID>|$ACCOUNT_ID|g" \
     -e "s|<AGG5M_TTL_SEC>|${AGG5M_TTL_SEC:-172800}|g" \
     -e "s|<AGG5M_TIMEZONE>|${AGG5M_TIMEZONE:-America/New_York}|g" \
     -e "s|<AGG5M_MAX_BARS>|${AGG5M_MAX_BARS:-120}|g" \
+    -e "s|<QUOTE_PL_TIMEZONE>|${QUOTE_PL_TIMEZONE:-America/New_York}|g" \
+    -e "s|<QUOTE_PL_MARKET_CLOSE_HOUR>|${QUOTE_PL_MARKET_CLOSE_HOUR:-16}|g" \
+    -e "s|<QUOTE_PL_MARKET_CLOSE_MINUTE>|${QUOTE_PL_MARKET_CLOSE_MINUTE:-0}|g" \
+    -e "s|<QUOTE_PREV_CLOSE_TTL_SEC>|${QUOTE_PREV_CLOSE_TTL_SEC:-604800}|g" \
     -e "s|<POLYGON_DISCOVER_TICKERS>|${POLYGON_DISCOVER_TICKERS:-true}|g" \
     -e "s|<POLYGON_TICKER_LIMIT>|${POLYGON_TICKER_LIMIT:-0}|g" \
     -e "s|<POLYGON_SUBSCRIBE_BATCH>|${POLYGON_SUBSCRIBE_BATCH:-500}|g" \
@@ -61,4 +65,3 @@ TASK_ARN=$(aws ecs run-task \
   --query 'tasks[0].taskArn' --output text)
 echo "Started task: $TASK_ARN"
 echo "Deploy complete."
-

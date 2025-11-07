@@ -11,6 +11,7 @@ from .config import Settings, mask_api_key
 from .logging_setup import get_logger
 from .redis_sink import BaseSink
 from .agg5m import Agg5mCollector
+from .quote_tracker import QuoteTracker
 
 
 logger = get_logger()
@@ -25,6 +26,7 @@ class PolygonWsClient:
         host_override: Optional[str] = None,
         symbols_override: Optional[List[str]] = None,
         agg5m_collector: Optional[Agg5mCollector] = None,
+        quote_tracker: Optional[QuoteTracker] = None,
     ):
         self._settings = settings
         self._sink = sink
@@ -37,6 +39,7 @@ class PolygonWsClient:
         self._host_override = host_override
         self._symbols = [s.upper() for s in (symbols_override if symbols_override is not None else settings.symbols)]
         self._agg5m = agg5m_collector
+        self._quote_tracker = quote_tracker
 
     def _debug_log(self, direction: str, raw: str) -> None:
         if self._debug:
@@ -213,15 +216,33 @@ class PolygonWsClient:
         # Quotes: Event type on Polygon is typically "Q" with fields like bid/ask
         if evt.get("ev") == "Q" and evt.get("sym"):
             sym = str(evt["sym"]).upper()
+            bid = float(evt.get("bp")) if isinstance(evt.get("bp"), (int, float)) else None
+            ask = float(evt.get("ap")) if isinstance(evt.get("ap"), (int, float)) else None
+            ts_raw = int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None
             quote = {
                 "symbol": sym,
-                "bid": float(evt.get("bp")) if isinstance(evt.get("bp"), (int, float)) else None,
+                "bid": bid,
                 "bidSize": int(evt.get("bs")) if isinstance(evt.get("bs"), (int, float)) else None,
-                "ask": float(evt.get("ap")) if isinstance(evt.get("ap"), (int, float)) else None,
+                "ask": ask,
                 "askSize": int(evt.get("as")) if isinstance(evt.get("as"), (int, float)) else None,
-                "ts": int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None,
+                "ts": ts_raw,
                 "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             }
+            if self._quote_tracker:
+                metrics = await self._quote_tracker.process_quote(sym, bid=bid, ask=ask, ts=ts_raw)
+                quote.update(metrics)
+            else:
+                price = None
+                if bid is not None and ask is not None:
+                    price = (bid + ask) / 2.0
+                elif bid is not None:
+                    price = bid
+                elif ask is not None:
+                    price = ask
+                quote["price"] = price
+                quote["prevClose"] = None
+                quote["dailyChange"] = None
+                quote["dailyChangePct"] = None
             await self._sink.set_quote(sym, quote)
             if hasattr(self._sink, "write_raw_event"):
                 try:
@@ -256,4 +277,3 @@ class PolygonWsClient:
             "tradesPerSymbol": trades,
             "aggsPerSymbol": aggs,
         }
-

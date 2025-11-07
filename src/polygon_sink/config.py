@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     agg5m_timezone: str = Field("America/New_York", alias="AGG5M_TIMEZONE")
     agg5m_max_bars: int = Field(120, alias="AGG5M_MAX_BARS")
 
+    # Quote daily P/L settings
+    quote_pl_timezone: str = Field("America/New_York", alias="QUOTE_PL_TIMEZONE")
+    quote_pl_market_close_hour: int = Field(16, alias="QUOTE_PL_MARKET_CLOSE_HOUR")
+    quote_pl_market_close_minute: int = Field(0, alias="QUOTE_PL_MARKET_CLOSE_MINUTE")
+    quote_prev_close_ttl_sec: int = Field(604_800, alias="QUOTE_PREV_CLOSE_TTL_SEC")
+
     @property
     def symbols(self) -> List[str]:
         raw = self.polygon_ws_symbols or ""
@@ -68,6 +74,12 @@ class Settings(BaseSettings):
             raise ValueError("AGG5M_FLUSH_INTERVAL_SEC must be > 0")
         if self.agg5m_max_bars <= 0:
             raise ValueError("AGG5M_MAX_BARS must be > 0")
+        if not 0 <= self.quote_pl_market_close_hour <= 23:
+            raise ValueError("QUOTE_PL_MARKET_CLOSE_HOUR must be between 0 and 23")
+        if not 0 <= self.quote_pl_market_close_minute <= 59:
+            raise ValueError("QUOTE_PL_MARKET_CLOSE_MINUTE must be between 0 and 59")
+        if self.quote_prev_close_ttl_sec <= 0:
+            raise ValueError("QUOTE_PREV_CLOSE_TTL_SEC must be > 0")
         return self
 
 

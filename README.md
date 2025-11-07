@@ -43,6 +43,10 @@ Optional
 - AGG5M_TTL_SEC: TTL for stock:agg5m keys (default 172800)
 - AGG5M_TIMEZONE: Timezone for day boundaries (default America/New_York)
 - AGG5M_MAX_BARS: Maximum 5-minute buckets stored per day (default 120)
+- QUOTE_PL_TIMEZONE: Timezone for daily P/L calculations (default America/New_York)
+- QUOTE_PL_MARKET_CLOSE_HOUR: Hour of market close in configured timezone (default 16)
+- QUOTE_PL_MARKET_CLOSE_MINUTE: Minute of market close (default 0)
+- QUOTE_PREV_CLOSE_TTL_SEC: TTL for cached previous close prices (default 604800)
 
 S3 Cold Path (optional)
 
@@ -126,6 +130,10 @@ Redis Key Schema and Contracts
     "bidSize": 200,
     "ask": 192.4,
     "askSize": 180,
+    "price": 192.35,
+    "prevClose": 191.2,
+    "dailyChange": 1.15,
+    "dailyChangePct": 0.601,
     "ts": 1715097600000,
     "updatedAt": "2025-05-07T15:04:05.000Z"
   }
@@ -206,4 +214,3 @@ S3 layout and Athena
     'projection.hour.digits'='2',
     'storage.location.template'='s3://S3_BUCKET/S3_PREFIX/channel=T/ingest_dt=${ingest_dt}/hour=${hour}/'
   );
-

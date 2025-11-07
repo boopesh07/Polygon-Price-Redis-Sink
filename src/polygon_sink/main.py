@@ -15,6 +15,7 @@ from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
 from .redis_sink import build_sink
 from .agg5m import Agg5mCollector
+from .quote_tracker import QuoteTracker
 from .ws_client import PolygonWsClient
 from .tickers import fetch_all_active_stock_tickers
 
@@ -103,6 +104,13 @@ async def _main_async() -> None:
         max_bars=settings.agg5m_max_bars,
     )
     agg5m_collector.start()
+    quote_tracker = QuoteTracker(
+        sink,
+        settings.quote_pl_timezone,
+        settings.quote_pl_market_close_hour,
+        settings.quote_pl_market_close_minute,
+        settings.quote_prev_close_ttl_sec,
+    )
     ok = await sink.ping()
     logger.info("redis_health", ok=ok)
     # Startup write/read validation; exit if it fails
@@ -116,13 +124,29 @@ async def _main_async() -> None:
     # Real-time (business) host: AM + FMV
     rt_url = settings.normalized_ws_url_for("AM")
     clients.append(
-        PolygonWsClient(settings, sink, channels=["AM", "FMV"], host_override=rt_url, symbols_override=all_symbols, agg5m_collector=agg5m_collector)
+        PolygonWsClient(
+            settings,
+            sink,
+            channels=["AM", "FMV"],
+            host_override=rt_url,
+            symbols_override=all_symbols,
+            agg5m_collector=agg5m_collector,
+            quote_tracker=quote_tracker,
+        )
     )
 
     # Delayed (delayed-business) host: T + Q
     delayed_url = settings.normalized_ws_url_for("T")
     clients.append(
-        PolygonWsClient(settings, sink, channels=["T", "Q"], host_override=delayed_url, symbols_override=all_symbols, agg5m_collector=agg5m_collector)
+        PolygonWsClient(
+            settings,
+            sink,
+            channels=["T", "Q"],
+            host_override=delayed_url,
+            symbols_override=all_symbols,
+            agg5m_collector=agg5m_collector,
+            quote_tracker=quote_tracker,
+        )
     )
 
     stop_event = asyncio.Event()
@@ -164,4 +188,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

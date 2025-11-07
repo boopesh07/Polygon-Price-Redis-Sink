@@ -5,8 +5,8 @@ __all__ = [
     "ws_client",
     "tickers",
     "agg5m",
+    "quote_tracker",
 ]
 
 __version__ = "0.1.0"
 __doc__ = "Polygon WebSocket → Redis Sink"
-
