@@ -252,7 +252,7 @@ class PolygonWsClient:
             return
 
         # FMV: Fair Market Value per-second indicative price; assume ev == "FMV" and fields p (price), t (ts)
-        if evt.get("ev") == "FMV" and evt.get("sym") and isinstance(evt.get("p"), (int, float)):
+        if evt.get("ev") == "FMV" and evt.get("sym") and isinstance(evt.get("fmv"), (int, float)):
             sym = str(evt["sym"]).upper()
             fmv = {
                 "symbol": sym,
