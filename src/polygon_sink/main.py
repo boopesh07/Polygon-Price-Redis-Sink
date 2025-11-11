@@ -17,7 +17,6 @@ from .redis_sink import build_sink
 from .agg5m import Agg5mCollector
 from .quote_tracker import QuoteTracker
 from .ws_client import PolygonWsClient
-from .tickers import fetch_all_active_stock_tickers
 
 
 async def _health_loop(client: PolygonWsClient, interval_sec: int) -> None:
@@ -80,19 +79,11 @@ async def _main_async() -> None:
     settings = Settings()
     configure_logging(debug=settings.ws_debug)
     logger = get_logger()
-    # Discover all active stock tickers
-    if settings.polygon_discover_tickers:
-        all_symbols = await fetch_all_active_stock_tickers(settings.polygon_api_key)
-    else:
-        all_symbols = settings.symbols
-    if settings.polygon_ticker_limit and settings.polygon_ticker_limit > 0:
-        all_symbols = all_symbols[: settings.polygon_ticker_limit]
-    logger.info("discovered_symbols", count=len(all_symbols))
     logger.info(
         "starting_polygon_sink",
         realtime_host=settings.polygon_ws_host_realtime,
         delayed_host=settings.polygon_ws_host_delayed,
-        symbols=all_symbols[:20],
+        subscription_mode="wildcard",
     )
 
     sink = build_sink(settings)
@@ -129,7 +120,6 @@ async def _main_async() -> None:
             sink,
             channels=["AM", "FMV"],
             host_override=rt_url,
-            symbols_override=all_symbols,
             agg5m_collector=agg5m_collector,
             quote_tracker=quote_tracker,
         )
@@ -143,7 +133,6 @@ async def _main_async() -> None:
             sink,
             channels=["T", "Q"],
             host_override=delayed_url,
-            symbols_override=all_symbols,
             agg5m_collector=agg5m_collector,
             quote_tracker=quote_tracker,
         )

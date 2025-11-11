@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     polygon_api_key: str = Field(..., alias="POLYGON_API_KEY")
     polygon_ws_host_realtime: str = Field(..., alias="POLYGON_WS_HOST_REALTIME")
     polygon_ws_host_delayed: str = Field(..., alias="POLYGON_WS_HOST_DELAYED")
-    polygon_ws_symbols: str = Field("AAPL,MSFT,TSLA", alias="POLYGON_WS_SYMBOLS")
 
     redis_url: str | None = Field(None, alias="REDIS_URL")
     redis_token: str | None = Field(None, alias="REDIS_TOKEN")
@@ -22,11 +21,6 @@ class Settings(BaseSettings):
     backoff_initial_ms: int = Field(1000, alias="BACKOFF_INITIAL_MS")
     backoff_factor: float = Field(2.0, alias="BACKOFF_FACTOR")
     backoff_max_ms: int = Field(30000, alias="BACKOFF_MAX_MS")
-
-    # Ticker discovery and subscription behavior
-    polygon_discover_tickers: bool = Field(True, alias="POLYGON_DISCOVER_TICKERS")
-    polygon_ticker_limit: int = Field(0, alias="POLYGON_TICKER_LIMIT")  # 0 means unlimited
-    subscribe_batch_size: int = Field(500, alias="POLYGON_SUBSCRIBE_BATCH")
 
     # S3 cold-path configuration
     s3_enabled: bool = Field(False, alias="S3_ENABLED")
@@ -49,11 +43,6 @@ class Settings(BaseSettings):
     quote_pl_market_close_hour: int = Field(16, alias="QUOTE_PL_MARKET_CLOSE_HOUR")
     quote_pl_market_close_minute: int = Field(0, alias="QUOTE_PL_MARKET_CLOSE_MINUTE")
     quote_prev_close_ttl_sec: int = Field(604_800, alias="QUOTE_PREV_CLOSE_TTL_SEC")
-
-    @property
-    def symbols(self) -> List[str]:
-        raw = self.polygon_ws_symbols or ""
-        return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
     def normalized_ws_url_for(self, channel: str) -> str:
         # AM and FMV -> realtime host; T and Q -> delayed host

@@ -9,7 +9,7 @@ This service (polygon-sink) maintains exactly two WebSocket connections to Polyg
 - stock:trade:{SYMBOL}
 - stock:quote:{SYMBOL}
 
-It is designed to run as a single replica and is suitable for AWS ECS Fargate. One WS client connects to the real-time host (AM+FMV). A second WS client connects to the delayed host (T+Q).
+It is designed to run as a single replica and is suitable for AWS ECS Fargate. One WS client connects to the real-time host (AM+FMV). A second WS client connects to the delayed host (T+Q). The service uses wildcard subscriptions (e.g., `AM.*`, `T.*`) to automatically receive data for all active stock tickers without requiring ticker discovery or enumeration.
 
 References
 
@@ -19,7 +19,6 @@ References
 Environment Variables (required)
 
 - POLYGON_API_KEY: Polygon API key
-- POLYGON_WS_SYMBOLS: Comma-separated symbols (e.g., AAPL,MSFT,TSLA)
 - POLYGON_WS_HOST_REALTIME: Real-time host (e.g., wss://business.polygon.io). Do NOT include /stocks; the service appends it.
 - POLYGON_WS_HOST_DELAYED: Delayed host (e.g., wss://delayed-business.polygon.io). Do NOT include /stocks.
 - REDIS_URL: Standard Redis URL (redis://host:port/db) OR Upstash REST URL (https://...)
@@ -33,9 +32,6 @@ Optional
 - FMV_TTL_SEC: TTL for stock:fmv (default 60)
 - TRADE_TTL_SEC: TTL for stock:trade (default 60)
 - QUOTE_TTL_SEC: TTL for stock:quote (default 60)
-- POLYGON_DISCOVER_TICKERS: true|false to discover tickers from Polygon API (default true)
-- POLYGON_TICKER_LIMIT: Limit the number of discovered tickers (default 0 for unlimited)
-- POLYGON_SUBSCRIBE_BATCH: Batch size for subscribing to tickers (default 500)
 - BACKOFF_INITIAL_MS: Initial backoff for WebSocket reconnect (default 1000)
 - BACKOFF_FACTOR: Backoff factor for WebSocket reconnect (default 2.0)
 - BACKOFF_MAX_MS: Maximum backoff for WebSocket reconnect (default 30000)
@@ -140,10 +136,11 @@ Redis Key Schema and Contracts
 
 Operational Notes
 
-- The service authenticates first, then subscribes:
-  - Real-time host: AM and FMV per configured symbols
-  - Delayed host: T and Q per configured symbols
-- Health logs appear every WS_HEALTH_INTERVAL_SEC.
+- The service authenticates first, then subscribes using wildcard subscriptions:
+  - Real-time host: AM.* and FMV.* (subscribes to all stock tickers)
+  - Delayed host: T.* and Q.* (subscribes to all stock tickers)
+- Wildcard subscriptions eliminate the need for ticker discovery and batching
+- Health logs appear every WS_HEALTH_INTERVAL_SEC and include unique symbol counts and total event counts.
 - With WS_DEBUG=true, outbound/inbound frames (truncated) and `redis_write` events are logged.
 - Maintain a single ECS replica to keep one WS connection per host.
 

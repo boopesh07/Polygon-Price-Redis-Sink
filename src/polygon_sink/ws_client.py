@@ -24,7 +24,6 @@ class PolygonWsClient:
         sink: BaseSink,
         channels: Optional[List[str]] = None,
         host_override: Optional[str] = None,
-        symbols_override: Optional[List[str]] = None,
         agg5m_collector: Optional[Agg5mCollector] = None,
         quote_tracker: Optional[QuoteTracker] = None,
     ):
@@ -34,10 +33,11 @@ class PolygonWsClient:
         self._is_authenticated: bool = False
         self._trade_counts: Dict[str, Dict[str, int]] = {}
         self._agg_counts: Dict[str, Dict[str, int]] = {}
+        self._fmv_counts: Dict[str, Dict[str, int]] = {}
+        self._quote_counts: Dict[str, Dict[str, int]] = {}
         self._debug = settings.ws_debug
         self._channels = [c.upper() for c in (channels or ["T", "AM"])]
         self._host_override = host_override
-        self._symbols = [s.upper() for s in (symbols_override if symbols_override is not None else settings.symbols)]
         self._agg5m = agg5m_collector
         self._quote_tracker = quote_tracker
 
@@ -70,7 +70,7 @@ class PolygonWsClient:
         # If running split hosts, choose the URL based on the first requested channel
         primary = self._channels[0] if self._channels else "AM"
         url = self._host_override or self._settings.normalized_ws_url_for(primary)
-        logger.info("ws_connecting", url=url, symbols=self._symbols, channels=self._channels)
+        logger.info("ws_connecting", url=url, channels=self._channels, subscription_mode="wildcard")
         try:
             async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                 await self._handle_connection(ws)
@@ -134,26 +134,11 @@ class PolygonWsClient:
                 await self._send_json_str(ws, {"action": "auth", "params": self._settings.polygon_api_key})
             elif status == "auth_success":
                 self._is_authenticated = True
-                # Batch subscriptions to avoid overly large payloads
-                channel_prefixes: List[str] = []
-                if "T" in self._channels:
-                    channel_prefixes.append("T")
-                if "Q" in self._channels:
-                    channel_prefixes.append("Q")
-                if "AM" in self._channels:
-                    channel_prefixes.append("AM")
-                if "FMV" in self._channels:
-                    channel_prefixes.append("FMV")
-                batch_size = max(1, int(self._settings.subscribe_batch_size))
-                for i in range(0, len(self._symbols), batch_size):
-                    batch = self._symbols[i : i + batch_size]
-                    parts: List[str] = []
-                    for s in batch:
-                        for p in channel_prefixes:
-                            parts.append(f"{p}.{s}")
-                    sub = ",".join(parts)
-                    logger.info("ws_subscribing", batchStart=i, batchCount=len(batch))
-                    await self._send_json_str(ws, {"action": "subscribe", "params": sub})
+                # Subscribe to all tickers using wildcard subscriptions
+                for channel in self._channels:
+                    wildcard_sub = f"{channel}.*"
+                    logger.info("ws_subscribing", channel=channel, params=wildcard_sub)
+                    await self._send_json_str(ws, {"action": "subscribe", "params": wildcard_sub})
             elif status == "error":
                 logger.error("ws_status_error", message=evt.get("message"))
             return
@@ -249,14 +234,19 @@ class PolygonWsClient:
                     await getattr(self._sink, "write_raw_event")("Q", sym, evt)
                 except Exception:
                     pass
+            c = self._quote_counts.get(sym) or {"count": 0}
+            c["count"] += 1
+            if isinstance(evt.get("t"), (int, float)):
+                c["lastTs"] = int(evt["t"])  # type: ignore[index]
+            self._quote_counts[sym] = c
             return
 
-        # FMV: Fair Market Value per-second indicative price; assume ev == "FMV" and fields p (price), t (ts)
+        # FMV: Fair Market Value per-second indicative price; assume ev == "FMV" and field fmv (price), t (ts)
         if evt.get("ev") == "FMV" and evt.get("sym") and isinstance(evt.get("fmv"), (int, float)):
             sym = str(evt["sym"]).upper()
             fmv = {
                 "symbol": sym,
-                "price": float(evt["p"]),
+                "price": float(evt["fmv"]),
                 "ts": int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None,
                 "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             }
@@ -266,14 +256,24 @@ class PolygonWsClient:
                     await getattr(self._sink, "write_raw_event")("FMV", sym, evt)
                 except Exception:
                     pass
+            c = self._fmv_counts.get(sym) or {"count": 0}
+            c["count"] += 1
+            if isinstance(evt.get("t"), (int, float)):
+                c["lastTs"] = int(evt["t"])  # type: ignore[index]
+            self._fmv_counts[sym] = c
             return
 
     def health(self) -> Dict[str, Any]:
-        trades = {s: self._trade_counts.get(s, {"count": 0}) for s in self._symbols}
-        aggs = {s: self._agg_counts.get(s, {"count": 0}) for s in self._symbols}
         return {
             "authenticated": self._is_authenticated,
-            "subscribedSymbols": len(self._symbols),
-            "tradesPerSymbol": trades,
-            "aggsPerSymbol": aggs,
+            "channels": self._channels,
+            "subscription_mode": "wildcard",
+            "unique_trade_symbols": len(self._trade_counts),
+            "unique_agg_symbols": len(self._agg_counts),
+            "unique_fmv_symbols": len(self._fmv_counts),
+            "unique_quote_symbols": len(self._quote_counts),
+            "total_trade_events": sum(c.get("count", 0) for c in self._trade_counts.values()),
+            "total_agg_events": sum(c.get("count", 0) for c in self._agg_counts.values()),
+            "total_fmv_events": sum(c.get("count", 0) for c in self._fmv_counts.values()),
+            "total_quote_events": sum(c.get("count", 0) for c in self._quote_counts.values()),
         }

@@ -70,10 +70,6 @@
                     "value": "wss://delayed-business.polygon.io"
                 },
                 {
-                    "name": "POLYGON_WS_SYMBOLS",
-                    "value": "AAPL,MSFT,TSLA"
-                },
-                {
                     "name": "WS_DEBUG",
                     "value": "<WS_DEBUG>"
                 },
@@ -128,18 +124,6 @@
                 {
                     "name": "QUOTE_PREV_CLOSE_TTL_SEC",
                     "value": "<QUOTE_PREV_CLOSE_TTL_SEC>"
-                },
-                {
-                    "name": "POLYGON_DISCOVER_TICKERS",
-                    "value": "<POLYGON_DISCOVER_TICKERS>"
-                },
-                {
-                    "name": "POLYGON_TICKER_LIMIT",
-                    "value": "<POLYGON_TICKER_LIMIT>"
-                },
-                {
-                    "name": "POLYGON_SUBSCRIBE_BATCH",
-                    "value": "<POLYGON_SUBSCRIBE_BATCH>"
                 }
             ],
             "secrets": [],
