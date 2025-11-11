@@ -15,7 +15,7 @@ from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
 from .redis_sink import build_sink
 from .agg5m import Agg5mCollector
-from .quote_tracker import QuoteTracker
+from .fmv_tracker import FmvTracker
 from .ws_client import PolygonWsClient
 
 
@@ -95,7 +95,7 @@ async def _main_async() -> None:
         max_bars=settings.agg5m_max_bars,
     )
     agg5m_collector.start()
-    quote_tracker = QuoteTracker(
+    fmv_tracker = FmvTracker(
         sink,
         settings.quote_pl_timezone,
         settings.quote_pl_market_close_hour,
@@ -112,7 +112,7 @@ async def _main_async() -> None:
     # Build one or two clients depending on env overrides
     # One client per host. Real-time host handles AM+FMV. Delayed host handles T+Q.
     clients = []
-    # Real-time (business) host: AM + FMV
+    # Real-time (business) host: AM + FMV (with P/L tracking)
     rt_url = settings.normalized_ws_url_for("AM")
     clients.append(
         PolygonWsClient(
@@ -121,11 +121,11 @@ async def _main_async() -> None:
             channels=["AM", "FMV"],
             host_override=rt_url,
             agg5m_collector=agg5m_collector,
-            quote_tracker=quote_tracker,
+            fmv_tracker=fmv_tracker,
         )
     )
 
-    # Delayed (delayed-business) host: T + Q
+    # Delayed (delayed-business) host: T + Q (raw data only, no trackers)
     delayed_url = settings.normalized_ws_url_for("T")
     clients.append(
         PolygonWsClient(
@@ -134,7 +134,7 @@ async def _main_async() -> None:
             channels=["T", "Q"],
             host_override=delayed_url,
             agg5m_collector=agg5m_collector,
-            quote_tracker=quote_tracker,
+            fmv_tracker=None,
         )
     )
 

@@ -11,7 +11,7 @@ from .config import Settings, mask_api_key
 from .logging_setup import get_logger
 from .redis_sink import BaseSink
 from .agg5m import Agg5mCollector
-from .quote_tracker import QuoteTracker
+from .fmv_tracker import FmvTracker
 
 
 logger = get_logger()
@@ -25,7 +25,7 @@ class PolygonWsClient:
         channels: Optional[List[str]] = None,
         host_override: Optional[str] = None,
         agg5m_collector: Optional[Agg5mCollector] = None,
-        quote_tracker: Optional[QuoteTracker] = None,
+        fmv_tracker: Optional[FmvTracker] = None,
     ):
         self._settings = settings
         self._sink = sink
@@ -39,7 +39,7 @@ class PolygonWsClient:
         self._channels = [c.upper() for c in (channels or ["T", "AM"])]
         self._host_override = host_override
         self._agg5m = agg5m_collector
-        self._quote_tracker = quote_tracker
+        self._fmv_tracker = fmv_tracker
 
     def _debug_log(self, direction: str, raw: str) -> None:
         if self._debug:
@@ -198,36 +198,36 @@ class PolygonWsClient:
             self._agg_counts[sym] = c
             return
 
-        # Quotes: Event type on Polygon is typically "Q" with fields like bid/ask
+        # Quotes: Raw bid/ask data (NO P/L calculations - that's handled by FMV now)
         if evt.get("ev") == "Q" and evt.get("sym"):
             sym = str(evt["sym"]).upper()
             bid = float(evt.get("bp")) if isinstance(evt.get("bp"), (int, float)) else None
             ask = float(evt.get("ap")) if isinstance(evt.get("ap"), (int, float)) else None
             ts_raw = int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None
+            
+            # Compute mid-price from bid/ask
+            price = None
+            if bid is not None and ask is not None:
+                price = (bid + ask) / 2.0
+            elif bid is not None:
+                price = bid
+            elif ask is not None:
+                price = ask
+            
             quote = {
                 "symbol": sym,
                 "bid": bid,
                 "bidSize": int(evt.get("bs")) if isinstance(evt.get("bs"), (int, float)) else None,
                 "ask": ask,
                 "askSize": int(evt.get("as")) if isinstance(evt.get("as"), (int, float)) else None,
+                "price": price,
                 "ts": ts_raw,
                 "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             }
-            if self._quote_tracker:
-                metrics = await self._quote_tracker.process_quote(sym, bid=bid, ask=ask, ts=ts_raw)
-                quote.update(metrics)
-            else:
-                price = None
-                if bid is not None and ask is not None:
-                    price = (bid + ask) / 2.0
-                elif bid is not None:
-                    price = bid
-                elif ask is not None:
-                    price = ask
-                quote["price"] = price
-                quote["prevClose"] = None
-                quote["dailyChange"] = None
-                quote["dailyChangePct"] = None
+            
+            if self._debug:
+                logger.info("quote_processed", symbol=sym, bid=bid, ask=ask, price=price)
+            
             await self._sink.set_quote(sym, quote)
             if hasattr(self._sink, "write_raw_event"):
                 try:
@@ -241,15 +241,42 @@ class PolygonWsClient:
             self._quote_counts[sym] = c
             return
 
-        # FMV: Fair Market Value per-second indicative price; assume ev == "FMV" and field fmv (price), t (ts)
+        # FMV: Fair Market Value with P/L calculations
         if evt.get("ev") == "FMV" and evt.get("sym") and isinstance(evt.get("fmv"), (int, float)):
             sym = str(evt["sym"]).upper()
+            price = float(evt["fmv"])
+            ts = int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None
+            
+            # Process through FmvTracker to get P/L metrics
+            if self._fmv_tracker:
+                metrics = await self._fmv_tracker.process_fmv(sym, price=price, ts=ts)
+                # metrics = {price, prevClose, dailyChange, dailyChangePct}
+            else:
+                # Fallback if no tracker configured
+                metrics = {
+                    "price": price,
+                    "prevClose": None,
+                    "dailyChange": None,
+                    "dailyChangePct": None,
+                }
+            
             fmv = {
                 "symbol": sym,
-                "price": float(evt["fmv"]),
-                "ts": int(evt.get("t")) if isinstance(evt.get("t"), (int, float)) else None,
+                "ts": ts,
                 "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+                **metrics,  # Spread all P/L metrics
             }
+            
+            if self._debug:
+                logger.info(
+                    "fmv_processed",
+                    symbol=sym,
+                    price=price,
+                    prevClose=metrics.get("prevClose"),
+                    dailyChange=metrics.get("dailyChange"),
+                    dailyChangePct=metrics.get("dailyChangePct"),
+                )
+            
             await self._sink.set_fmv(sym, fmv)
             if hasattr(self._sink, "write_raw_event"):
                 try:

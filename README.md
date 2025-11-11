@@ -99,10 +99,13 @@ Redis Key Schema and Contracts
     ]
   }
 
-- stock:fmv:{SYMBOL} (TTL default 60s)
+- stock:fmv:{SYMBOL} (TTL default 60s) **[Contains Daily P/L Metrics]**
   {
     "symbol": "AAPL",
     "price": 192.34,
+    "prevClose": 191.2,
+    "dailyChange": 1.14,
+    "dailyChangePct": 0.596,
     "ts": 1715097600000,
     "updatedAt": "2025-05-07T15:04:05.000Z"
   }
@@ -119,7 +122,7 @@ Redis Key Schema and Contracts
     "updatedAt": "2025-05-07T15:04:05.000Z"
   }
 
-- stock:quote:{SYMBOL} (TTL default 60s)
+- stock:quote:{SYMBOL} (TTL default 60s) **[Raw Bid/Ask Data Only]**
   {
     "symbol": "AAPL",
     "bid": 192.3,
@@ -127,9 +130,6 @@ Redis Key Schema and Contracts
     "ask": 192.4,
     "askSize": 180,
     "price": 192.35,
-    "prevClose": 191.2,
-    "dailyChange": 1.15,
-    "dailyChangePct": 0.601,
     "ts": 1715097600000,
     "updatedAt": "2025-05-07T15:04:05.000Z"
   }
@@ -140,6 +140,11 @@ Operational Notes
   - Real-time host: AM.* and FMV.* (subscribes to all stock tickers)
   - Delayed host: T.* and Q.* (subscribes to all stock tickers)
 - Wildcard subscriptions eliminate the need for ticker discovery and batching
+- **Daily P/L tracking is performed on FMV events only**:
+  - FMV events include `prevClose`, `dailyChange`, and `dailyChangePct`
+  - Previous close prices are captured at market close time (default 16:00 ET)
+  - Previous close values are persisted to Redis with 7-day TTL for recovery after restarts
+  - Quote events contain only raw bid/ask data without P/L calculations
 - Health logs appear every WS_HEALTH_INTERVAL_SEC and include unique symbol counts and total event counts.
 - With WS_DEBUG=true, outbound/inbound frames (truncated) and `redis_write` events are logged.
 - Maintain a single ECS replica to keep one WS connection per host.
@@ -157,12 +162,17 @@ Keys to validate in Redis (by metric)
 
 - Aggregates per Minute (AM): key `stock:agg1m:{SYMBOL}` (TTL default 120s)
   - Example: redis-cli --raw GET stock:agg1m:AAPL
-- Fair Market Value (FMV): key `stock:fmv:{SYMBOL}` (TTL default 60s)
+- Fair Market Value (FMV): key `stock:fmv:{SYMBOL}` (TTL default 60s) **[Includes P/L]**
   - Example: redis-cli --raw GET stock:fmv:AAPL
+  - Should contain: price, prevClose, dailyChange, dailyChangePct
 - Trades (T): key `stock:trade:{SYMBOL}` (TTL default 60s)
   - Example: redis-cli --raw GET stock:trade:AAPL
-- Quotes (Q): key `stock:quote:{SYMBOL}` (TTL default 60s)
+- Quotes (Q): key `stock:quote:{SYMBOL}` (TTL default 60s) **[Raw Data Only]**
   - Example: redis-cli --raw GET stock:quote:AAPL
+  - Should contain: bid, ask, bidSize, askSize, price (NO P/L metrics)
+- Previous Close: key `stock:prev_close:{SYMBOL}` (TTL default 604800s = 7 days)
+  - Example: redis-cli --raw GET stock:prev_close:AAPL
+  - Used for calculating daily P/L metrics
 
 Notes
 
