@@ -1,7 +1,7 @@
 {
     "family": "polygon-hot-cold-sink",
     "networkMode": "awsvpc",
-    "cpu": "256",
+    "cpu": "512",
     "memory": "1024",
     "requiresCompatibilities": [
         "FARGATE"
@@ -11,7 +11,7 @@
     "containerDefinitions": [
         {
             "name": "polygon-redis-sink",
-            "cpu": 256,
+            "cpu": 512,
             "memory": 1024,
             "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/polygon-hot-cold-sink:latest",
             "essential": true,
