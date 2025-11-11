@@ -10,7 +10,7 @@ from massive.websocket.models import WebSocketMessage, Feed, Market
 from .agg5m import Agg5mCollector
 from .config import Settings, mask_api_key
 from .logging_setup import get_logger
-from .quote_tracker import QuoteTracker
+from .prev_close_recorder import PrevCloseRecorder
 from .redis_sink import BaseSink
 
 logger = get_logger()
@@ -43,13 +43,13 @@ class MassiveWsClient:
         sink: BaseSink,
         channels: List[str],
         agg5m_collector: Optional[Agg5mCollector] = None,
-        quote_tracker: Optional[QuoteTracker] = None,
+        prev_close_recorder: Optional[PrevCloseRecorder] = None,
     ) -> None:
         self._settings = settings
         self._sink = sink
         self._channels = [c.upper() for c in channels]
         self._agg5m = agg5m_collector
-        self._quote_tracker = quote_tracker
+        self._prev_close_recorder = prev_close_recorder
         self._stop_event = asyncio.Event()
         self._is_running = False
         self._client: Optional[WebSocketClient] = None
@@ -205,63 +205,25 @@ class MassiveWsClient:
             logger.warning("ws_event_unknown_type", event_type=event_type, symbol=symbol)
 
     async def _handle_trade(self, symbol: str, evt: Dict[str, Any]) -> None:
-        price = _to_float(evt.get("price") or evt.get("p"))
-        size = _to_int(evt.get("size") or evt.get("s"))
-        ts = _to_int(evt.get("timestamp") or evt.get("t"))
         trade_payload = {
             "symbol": symbol,
-            "price": price,
-            "ts": ts,
-            "size": size,
+            "price": evt.get("price") or evt.get("p"),
+            "ts": evt.get("timestamp") or evt.get("t"),
+            "size": evt.get("size") or evt.get("s"),
             "conditions": evt.get("conditions") or evt.get("c"),
             "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         }
         await self._sink.set_trade(symbol, trade_payload)
-        if hasattr(self._sink, "write_raw_event"):
-            try:
-                await getattr(self._sink, "write_raw_event")("T", symbol, evt)
-            except Exception:
-                pass
-        logger.info("trade_processed", symbol=symbol, price=price, size=size, ts=ts)
+        await self._write_raw_event("T", symbol, evt)
+        logger.info("trade_processed", symbol=symbol)
 
     async def _handle_quote(self, symbol: str, evt: Dict[str, Any]) -> None:
-        bid = _to_float(evt.get("bid_price") or evt.get("bp"))
-        ask = _to_float(evt.get("ask_price") or evt.get("ap"))
-        bid_size = _to_int(evt.get("bid_size") or evt.get("bs"))
-        ask_size = _to_int(evt.get("ask_size") or evt.get("as"))
-        ts = _to_int(evt.get("timestamp") or evt.get("t"))
-        quote = {
-            "symbol": symbol,
-            "bid": bid,
-            "bidSize": bid_size,
-            "ask": ask,
-            "askSize": ask_size,
-            "ts": ts,
-            "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-        }
-        if self._quote_tracker:
-            metrics = await self._quote_tracker.process_quote(symbol, bid=bid, ask=ask, ts=ts)
-            quote.update(metrics)
-        else:
-            price = None
-            if bid is not None and ask is not None:
-                price = (bid + ask) / 2.0
-            elif bid is not None:
-                price = bid
-            elif ask is not None:
-                price = ask
-            quote["price"] = price
-            quote["prevClose"] = None
-            quote["dailyChange"] = None
-            quote["dailyChangePct"] = None
-
-        await self._sink.set_quote(symbol, quote)
-        if hasattr(self._sink, "write_raw_event"):
-            try:
-                await getattr(self._sink, "write_raw_event")("Q", symbol, evt)
-            except Exception:
-                pass
-        logger.info("quote_processed", symbol=symbol, bid=bid, ask=ask, ts=ts)
+        payload = dict(evt)
+        payload["symbol"] = symbol
+        payload["updatedAt"] = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+        await self._sink.set_quote(symbol, payload)
+        await self._write_raw_event("Q", symbol, evt)
+        logger.info("quote_processed", symbol=symbol)
 
     async def _handle_aggregate(self, symbol: str, evt: Dict[str, Any]) -> None:
         start = _to_int(evt.get("start_timestamp") or evt.get("s"))
@@ -282,29 +244,44 @@ class MassiveWsClient:
         await self._sink.set_latest_agg1m(symbol, bar)
         if self._agg5m:
             await self._agg5m.on_minute_bar(symbol, bar)
-        if hasattr(self._sink, "write_raw_event"):
-            try:
-                await getattr(self._sink, "write_raw_event")("AM", symbol, evt)
-            except Exception:
-                pass
+        await self._write_raw_event("AM", symbol, evt)
         logger.info("aggregate_processed", symbol=symbol, close=bar["close"], ts=bar["end"])
 
     async def _handle_fmv(self, symbol: str, evt: Dict[str, Any]) -> None:
         price = _to_float(evt.get("fmv") or evt.get("price"))
         ts = _to_int(evt.get("timestamp") or evt.get("t"))
+        if self._prev_close_recorder:
+            await self._prev_close_recorder.maybe_record_from_fmv(symbol, price, ts)
+            prev_close = await self._prev_close_recorder.get_prev_close(symbol)
+        else:
+            prev_close = await self._sink.get_prev_close(symbol)
+        daily_change = None
+        daily_change_pct = None
+        if price is not None and prev_close is not None:
+            daily_change = price - prev_close
+            if prev_close != 0:
+                daily_change_pct = (daily_change / prev_close) * 100
         fmv = {
             "symbol": symbol,
             "price": price,
+            "prevClose": prev_close,
+            "dailyChange": daily_change,
+            "dailyChangePct": daily_change_pct,
             "ts": ts,
             "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         }
         await self._sink.set_fmv(symbol, fmv)
-        if hasattr(self._sink, "write_raw_event"):
-            try:
-                await getattr(self._sink, "write_raw_event")("FMV", symbol, evt)
-            except Exception:
-                pass
-        logger.info("fmv_processed", symbol=symbol, price=price, ts=ts)
+        await self._write_raw_event("FMV", symbol, evt)
+        logger.info("fmv_processed", symbol=symbol)
+
+    async def _write_raw_event(self, channel: str, symbol: str, evt: Dict[str, Any]) -> None:
+        writer = getattr(self._sink, "write_raw_event", None)
+        if not writer:
+            return
+        try:
+            await writer(channel, symbol, evt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("raw_event_write_failed", channel=channel, symbol=symbol, error=str(exc))
 
     def health(self) -> Dict[str, Any]:
         return {

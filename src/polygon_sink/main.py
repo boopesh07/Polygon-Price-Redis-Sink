@@ -14,7 +14,7 @@ from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
 from .redis_sink import build_sink
 from .agg5m import Agg5mCollector
-from .quote_tracker import QuoteTracker
+from .prev_close_recorder import PrevCloseRecorder
 from .ws_client import MassiveWsClient
 
 
@@ -94,12 +94,12 @@ async def _main_async() -> None:
         max_bars=settings.agg5m_max_bars,
     )
     agg5m_collector.start()
-    quote_tracker = QuoteTracker(
+    prev_close_recorder = PrevCloseRecorder(
         sink,
-        settings.quote_pl_timezone,
-        settings.quote_pl_market_close_hour,
-        settings.quote_pl_market_close_minute,
-        settings.quote_prev_close_ttl_sec,
+        timezone_name=settings.quote_pl_timezone,
+        close_hour=settings.quote_pl_market_close_hour,
+        close_minute=settings.quote_pl_market_close_minute,
+        prev_close_ttl=settings.quote_prev_close_ttl_sec,
     )
     ok = await sink.ping()
     logger.info("redis_health", ok=ok)
@@ -119,7 +119,7 @@ async def _main_async() -> None:
             sink,
             channels=["AM", "FMV"],
             agg5m_collector=agg5m_collector,
-            quote_tracker=quote_tracker,
+            prev_close_recorder=prev_close_recorder,
         )
     )
 
@@ -130,7 +130,7 @@ async def _main_async() -> None:
             sink,
             channels=["T", "Q"],
             agg5m_collector=agg5m_collector,
-            quote_tracker=quote_tracker,
+            prev_close_recorder=prev_close_recorder,
         )
     )
     

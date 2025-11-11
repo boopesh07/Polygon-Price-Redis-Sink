@@ -2,8 +2,8 @@ python-dotenv
 massive
 redis
 upstash-redis
-uvloop; platform_system!='Windows'
 structlog
+uvloop; platform_system!='Windows'
 pydantic
 pydantic-settings
 boto3

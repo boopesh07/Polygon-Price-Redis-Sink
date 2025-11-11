@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     aws_region: str | None = Field(None, alias="AWS_REGION")
     s3_window_minutes: int = Field(30, alias="S3_WINDOW_MINUTES")
     s3_max_object_bytes: int = Field(512_000_000, alias="S3_MAX_OBJECT_BYTES")
-    s3_part_size_bytes: int = Field(16_777_216, alias="S3_PART_SIZE_BYTES")
+    s3_part_size_bytes: int = Field(33_554_432, alias="S3_PART_SIZE_BYTES")
     s3_use_marker: bool = Field(True, alias="S3_USE_MARKER")
 
     # 5-minute aggregate settings

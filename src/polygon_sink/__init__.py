@@ -4,7 +4,7 @@ __all__ = [
     "redis_sink",
     "ws_client",
     "agg5m",
-    "quote_tracker",
+    "prev_close_recorder",
 ]
 
 __version__ = "0.1.0"

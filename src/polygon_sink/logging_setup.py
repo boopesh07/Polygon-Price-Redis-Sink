@@ -1,27 +1,20 @@
 import logging
 import sys
-from typing import Any
 
 try:
     import structlog
-except ImportError:  # pragma: no cover - fallback when structlog missing (e.g., local tests)
+except ModuleNotFoundError:  # pragma: no cover - fallback for test environments
     structlog = None  # type: ignore[assignment]
 
 
 def configure_logging(debug: bool = False) -> None:
-    level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
-        level=level,
+        level=logging.DEBUG if debug else logging.INFO,
     )
-
     if structlog is None:
-        logging.getLogger(__name__).warning(
-            "structlog_not_available", fallback_logger="logging", level=level
-        )
         return
-
     timestamper = structlog.processors.TimeStamper(fmt="iso")
     structlog.configure(
         processors=[
@@ -40,9 +33,7 @@ def configure_logging(debug: bool = False) -> None:
     )
 
 
-def get_logger() -> Any:
-    if structlog is not None:
-        return structlog.get_logger()
-    return logging.getLogger("polygon_sink")
-
-
+def get_logger():
+    if structlog is None:
+        return logging.getLogger("polygon_sink")
+    return structlog.get_logger("polygon_sink")

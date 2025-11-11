@@ -1,216 +1,90 @@
 Polygon WebSocket → Redis Sink (Python)
 
-Overview
+## Overview
+`polygon-sink` keeps exactly two WebSocket connections to Polygon’s Stocks feed by way of the `massive` SDK:
 
-This service (polygon-sink) maintains exactly two WebSocket connections to Polygon stocks (one per host) and sinks AM, FMV, T, and Q to Redis with strict key schemas:
+| Client | Feed | Channels | Purpose |
+| ------ | ---- | -------- | ------- |
+| realtime | `Feed.Business` | `AM`, `FMV` | minute aggregates + Fair Market Value |
+| delayed  | `Feed.DelayedBusiness` | `T`, `Q` | trades + quotes (fallback for non-real‑time data) |
 
-- stock:agg1m:{SYMBOL}
-- stock:fmv:{SYMBOL}
-- stock:trade:{SYMBOL}
-- stock:quote:{SYMBOL}
+Every event moves straight to Redis using deterministic keys and json payloads, and—if `S3_ENABLED=true`—raw frames are mirrored to S3 as NDJSON for cold-storage/auditing.
 
-It is designed to run as a single replica and is suitable for AWS ECS Fargate. One WS client connects to the real-time host (AM+FMV). A second WS client connects to the delayed host (T+Q).
+Key schemas (TTL defaults in seconds):
 
-References
+| Key | TTL | Payload Highlights |
+| --- | --- | ------------------ |
+| `stock:agg1m:{SYMBOL}` | none (latest only) | Polygon minute bar + metadata |
+| `stock:agg5m:{SYMBOL}` | `AGG5M_TTL_SEC` (default 172800) | {`day`, `bars`[]} produced by `Agg5mCollector` |
+| `stock:fmv:{SYMBOL}` | none (latest only) | FMV price + `prevClose`, `dailyChange`, `dailyChangePct` |
+| `stock:trade:{SYMBOL}` | none (latest only) | Latest trade |
+| `stock:quote:{SYMBOL}` | none (latest only) | Raw quote payload (bid/ask/size, timestamps, etc.) |
+| `stock:prev_close:{SYMBOL}` | `QUOTE_PREV_CLOSE_TTL_SEC` (default 604800) | Stored at 4 PM from FMV via `PrevCloseRecorder` |
 
-- Polygon WebSocket quickstart: `https://polygon.io/docs/websocket/quickstart`
-- Polygon Python client repo (reference only): `https://github.com/polygon-io/client-python`
+Quotes remain untouched; FMV owns all daily P/L calculations. At (or just after) 4 PM in the configured timezone, the first FMV price per symbol becomes the next session’s `stock:prev_close:*`, guaranteeing tomorrow morning’s FMV deltas are accurate. Any FMV error automatically logs at `warning` or `error` level, so CloudWatch surfaces issues immediately.
 
-Environment Variables (required)
+## Configuration
+All configuration is managed through Pydantic settings (`src/polygon_sink/config.py`). Required vars:
 
-- POLYGON_API_KEY: Polygon API key
-- POLYGON_WS_SYMBOLS: Comma-separated symbols (e.g., AAPL,MSFT,TSLA)
-- POLYGON_WS_HOST_REALTIME: Real-time host (e.g., wss://business.polygon.io). Do NOT include /stocks; the service appends it.
-- POLYGON_WS_HOST_DELAYED: Delayed host (e.g., wss://delayed-business.polygon.io). Do NOT include /stocks.
-- REDIS_URL: Standard Redis URL (redis://host:port/db) OR Upstash REST URL (https://...)
-- REDIS_TOKEN: Required if using Upstash REST URL
+- `POLYGON_API_KEY`
+- `REDIS_URL` – must be Upstash REST (https://…)
+- `REDIS_TOKEN`
+- `QUOTE_PL_TIMEZONE`, `QUOTE_PL_MARKET_CLOSE_HOUR`, `QUOTE_PL_MARKET_CLOSE_MINUTE`, `QUOTE_PREV_CLOSE_TTL_SEC` – control prev-close behavior
 
-Optional
+Optional highlights:
 
-- WS_DEBUG: true|false for verbose logs (default false)
-- WS_HEALTH_INTERVAL_SEC: Health log cadence (default 30)
-- AGG1M_TTL_SEC: TTL for stock:agg1m (default 120)
-- FMV_TTL_SEC: TTL for stock:fmv (default 60)
-- TRADE_TTL_SEC: TTL for stock:trade (default 60)
-- QUOTE_TTL_SEC: TTL for stock:quote (default 60)
-- POLYGON_DISCOVER_TICKERS: true|false to discover tickers from Polygon API (default true)
-- POLYGON_TICKER_LIMIT: Limit the number of discovered tickers (default 0 for unlimited)
-- POLYGON_SUBSCRIBE_BATCH: Batch size for subscribing to tickers (default 500)
-- BACKOFF_INITIAL_MS: Initial backoff for WebSocket reconnect (default 1000)
-- BACKOFF_FACTOR: Backoff factor for WebSocket reconnect (default 2.0)
-- BACKOFF_MAX_MS: Maximum backoff for WebSocket reconnect (default 30000)
-- AGG5M_FLUSH_INTERVAL_SEC: Flush cadence for 5-minute snapshots (default 900)
-- AGG5M_TTL_SEC: TTL for stock:agg5m keys (default 172800)
-- AGG5M_TIMEZONE: Timezone for day boundaries (default America/New_York)
-- AGG5M_MAX_BARS: Maximum 5-minute buckets stored per day (default 120)
-- QUOTE_PL_TIMEZONE: Timezone for daily P/L calculations (default America/New_York)
-- QUOTE_PL_MARKET_CLOSE_HOUR: Hour of market close in configured timezone (default 16)
-- QUOTE_PL_MARKET_CLOSE_MINUTE: Minute of market close (default 0)
-- QUOTE_PREV_CLOSE_TTL_SEC: TTL for cached previous close prices (default 604800)
+- `WS_DEBUG` – emit verbose `redis_write` logs
+- `WS_HEALTH_INTERVAL_SEC` – periodic `health` heartbeat
+- `BACKOFF_INITIAL_MS`, `BACKOFF_FACTOR`, `BACKOFF_MAX_MS`
+- `AGG5M_*` knobs for the 5‑minute collector
+- `S3_ENABLED` + `S3_BUCKET` + `S3_PREFIX` + `AWS_REGION` + `S3_WINDOW_MINUTES` + `S3_MAX_OBJECT_BYTES` + `S3_PART_SIZE_BYTES` + `S3_USE_MARKER`
 
-S3 Cold Path (optional)
+See `.env.example` for the exhaustive list.
 
-- S3_ENABLED: true|false to enable S3 raw NDJSON sink (default false)
-- S3_BUCKET: Target S3 bucket
-- S3_PREFIX: Base prefix within the bucket (e.g., polygon/raw)
-- AWS_REGION: AWS region for S3 client
-- S3_WINDOW_MINUTES: Rotation window minutes (default 30)
-- S3_MAX_OBJECT_BYTES: Max object size before rotate (default 512000000)
-- S3_PART_SIZE_BYTES: Multipart upload part size (default 16777216)
-- S3_USE_MARKER: Create uploading.marker during MPU (default true)
+## Runtime Flow
+1. `polygon_sink.main` loads settings, configures structured logging (`structlog`), builds the Redis sink (Upstash only) and optional S3 writers.
+2. `Agg5mCollector` accumulates minute bars into 5‑minute buckets and flushes asynchronously based on `AGG5M_FLUSH_INTERVAL_SEC`.
+3. `PrevCloseRecorder` watches FMV events and writes a single `stock:prev_close:*` per symbol per day.
+4. Two `MassiveWsClient` instances start, each with exponential backoff. Every handler writes to Redis and optionally calls `write_raw_event` so S3 mirrors stay in lockstep. Any failure writing to Redis or S3 is logged with `logger.error`/`logger.warning` so CloudWatch shows red immediately.
+5. A lightweight `_health_loop` emits `{"is_running": …}` snapshots at `WS_HEALTH_INTERVAL_SEC`.
 
-Local Development
+## S3 Cold Path
+`S3RawMultiWriter` spins up one rolling writer per channel. Each writer:
 
-1) Create and activate a virtualenv and install dependencies:
+- rotates files by `S3_WINDOW_MINUTES` **or** `S3_MAX_OBJECT_BYTES` (whichever comes first)
+- uploads streaming multipart parts (`S3_PART_SIZE_BYTES`, ≥16 MB) and deletes bytes from memory immediately, keeping resident memory at ~one part per channel
+- writes/removes `uploading.marker` files (warnings logged if marker I/O fails)
 
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
+Layout: `s3://$S3_BUCKET/$S3_PREFIX/channel={AM|FMV|T|Q}/ingest_dt=YYYY/MM/DD/hour=HH/part=YYYYMMDD_HHMM-YYYYMMDD_HHMM/{hostname}-seq=######.ndjson`
 
-2) Copy env template and set values:
+## Local Development
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # fill in secrets
+export PYTHONPATH=src
+python -m polygon_sink.main
+```
 
-   cp .env.example .env
+Unit tests target the collectors/recorders:
+```bash
+export PYTHONPATH=src
+pytest
+```
 
-   Ensure both POLYGON_WS_HOST_REALTIME and POLYGON_WS_HOST_DELAYED are set.
+To verify Redis connectivity independently:
+```bash
+export PYTHONPATH=src
+python -m polygon_sink.redis_unit_test
+```
 
-3) Run the service:
+## Deployment
+- Build container: `docker build -t polygon-sink:latest .`
+- ECS/Fargate: use `ecs/task-def.json` as a template. Only **one** task should run at a time to avoid duplicate Polygon subscriptions.
+- Structured logs (JSON via `structlog`) ship straight to CloudWatch through the awslogs driver; all Redis/S3/Polygon failures are logged at `error` or `warning` and therefore visible in dashboards/alarms.
 
-   export PYTHONPATH=src
-   python -m polygon_sink.main
-
-Redis Key Schema and Contracts
-
-- stock:agg1m:{SYMBOL} (TTL default 120s)
-  {
-    "symbol": "AAPL",
-    "start": 1715097600000,
-    "end": 1715097659999,
-    "open": 191.9,
-    "high": 192.7,
-    "low": 191.8,
-    "close": 192.3,
-    "volume": 21834,
-    "vwap": 192.1,
-    "updatedAt": "2025-05-07T15:04:05.000Z"
-  }
-- stock:agg5m:{SYMBOL} (TTL default 172800s)
-  {
-    "day": "2025-05-07",
-    "bars": [
-      { "ts": 1715099400000, "close": 192.30 },
-      { "ts": 1715099700000, "close": 192.45 },
-      { "ts": 1715100000000, "close": 192.55 }
-    ]
-  }
-
-- stock:fmv:{SYMBOL} (TTL default 60s)
-  {
-    "symbol": "AAPL",
-    "price": 192.34,
-    "ts": 1715097600000,
-    "updatedAt": "2025-05-07T15:04:05.000Z"
-  }
-
-- stock:trade:{SYMBOL} (TTL default 60s)
-  {
-    "symbol": "AAPL",
-    "price": 192.34,
-    "ts": 1715097600000,
-    "size": 100,
-    "conditions": [
-      12
-    ],
-    "updatedAt": "2025-05-07T15:04:05.000Z"
-  }
-
-- stock:quote:{SYMBOL} (TTL default 60s)
-  {
-    "symbol": "AAPL",
-    "bid": 192.3,
-    "bidSize": 200,
-    "ask": 192.4,
-    "askSize": 180,
-    "price": 192.35,
-    "prevClose": 191.2,
-    "dailyChange": 1.15,
-    "dailyChangePct": 0.601,
-    "ts": 1715097600000,
-    "updatedAt": "2025-05-07T15:04:05.000Z"
-  }
-
-Operational Notes
-
-- The service authenticates first, then subscribes:
-  - Real-time host: AM and FMV per configured symbols
-  - Delayed host: T and Q per configured symbols
-- Health logs appear every WS_HEALTH_INTERVAL_SEC.
-- With WS_DEBUG=true, outbound/inbound frames (truncated) and `redis_write` events are logged.
-- Maintain a single ECS replica to keep one WS connection per host.
-
-Validate Redis
-
-- Quick check using the built-in unit test:
-
-  export PYTHONPATH=src
-  python -m polygon_sink.redis_unit_test
-
-- This writes `stock:test` with TTL 60s and reads it back over your configured REDIS_URL (and REDIS_TOKEN for Upstash REST).
-
-Keys to validate in Redis (by metric)
-
-- Aggregates per Minute (AM): key `stock:agg1m:{SYMBOL}` (TTL default 120s)
-  - Example: redis-cli --raw GET stock:agg1m:AAPL
-- Fair Market Value (FMV): key `stock:fmv:{SYMBOL}` (TTL default 60s)
-  - Example: redis-cli --raw GET stock:fmv:AAPL
-- Trades (T): key `stock:trade:{SYMBOL}` (TTL default 60s)
-  - Example: redis-cli --raw GET stock:trade:AAPL
-- Quotes (Q): key `stock:quote:{SYMBOL}` (TTL default 60s)
-  - Example: redis-cli --raw GET stock:quote:AAPL
-
-Notes
-
-- Keys should refresh as live data arrives; verify TTL > 0 and values update over time.
-- With WS_DEBUG=true, you will see `redis_write` logs for each write, including key and TTL.
-
-Docker
-
-- See Dockerfile and .dockerignore. Build with:
-
-  docker build -t polygon-sink:latest .
-
-AWS ECS
-
-- See `ecs/task-def.json` and `ecs/service.json` for example task and service definitions (Fargate, awslogs). Provide secrets via AWS SSM/Secrets Manager. Ensure desiredCount=1.
-
-S3 layout and Athena
-
-- Objects are written as NDJSON, partitioned by channel and time:
-  - s3://$S3_BUCKET/$S3_PREFIX/channel={AM|FMV|T|Q}/ingest_dt=YYYY/MM/DD/hour=HH/part=YYYYMMDD_HHMM-YYYYMMDD_HHMM/{hostname}-seq=000001.ndjson
-- Example Athena table for Trades (projection enabled; adjust bucket/prefix):
-
-  CREATE EXTERNAL TABLE IF NOT EXISTS polygon_trades_raw (
-    symbol string,
-    p double,
-    s bigint,
-    c array<int>,
-    t bigint,
-    q bigint,
-    ingestTs string
-  )
-  PARTITIONED BY (
-    ingest_dt string,
-    hour string
-  )
-  ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
-  WITH SERDEPROPERTIES ('ignore.malformed.json'='true')
-  LOCATION 's3://S3_BUCKET/S3_PREFIX/channel=T/'
-  TBLPROPERTIES (
-    'projection.enabled'='true',
-    'projection.ingest_dt.type'='date',
-    'projection.ingest_dt.range'='2024/01/01,NOW',
-    'projection.ingest_dt.format'='yyyy/MM/dd',
-    'projection.hour.type'='integer',
-    'projection.hour.range'='0,23',
-    'projection.hour.digits'='2',
-    'storage.location.template'='s3://S3_BUCKET/S3_PREFIX/channel=T/ingest_dt=${ingest_dt}/hour=${hour}/'
-  );
+## Operational Tips
+- Set `WS_DEBUG=true` temporarily when troubleshooting Redis writes.
+- Watch `prev_close_recorded` logs around 4 PM to ensure FMV → prev-close writes succeed; if a ticker stops publishing FMV, the recorder simply skips logging and the key will expire, allowing the next valid FMV to backfill.
+- If S3 throttles or fails, you’ll see `s3_finalize_failed`, `s3_marker_*`, or `raw_event_write_failed` logs. Those events do **not** stop Redis writes but should be acted on quickly.
