@@ -1,7 +1,7 @@
 python-dotenv
-websockets
+massive
 redis
-httpx
+upstash-redis
 uvloop; platform_system!='Windows'
 structlog
 pydantic

@@ -23,7 +23,14 @@ class _QuoteState:
 
 
 class QuoteTracker:
-    def __init__(self, sink: BaseSink, timezone_name: str, close_hour: int, close_minute: int, prev_close_ttl: int) -> None:
+    def __init__(
+        self,
+        sink: BaseSink,
+        timezone_name: str,
+        close_hour: int,
+        close_minute: int,
+        prev_close_ttl: int,
+    ) -> None:
         self._sink = sink
         try:
             self._tz = ZoneInfo(timezone_name)

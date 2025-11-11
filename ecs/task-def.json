@@ -63,15 +63,15 @@
                 },
                 {
                     "name": "POLYGON_WS_HOST_REALTIME",
-                    "value": "wss://business.polygon.io"
+                    "value": ""
                 },
                 {
                     "name": "POLYGON_WS_HOST_DELAYED",
-                    "value": "wss://delayed-business.polygon.io"
+                    "value": ""
                 },
                 {
                     "name": "POLYGON_WS_SYMBOLS",
-                    "value": "AAPL,MSFT,TSLA"
+                    "value": ""
                 },
                 {
                     "name": "WS_DEBUG",

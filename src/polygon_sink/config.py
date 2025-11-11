@@ -9,9 +9,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
     polygon_api_key: str = Field(..., alias="POLYGON_API_KEY")
-    polygon_ws_host_realtime: str = Field(..., alias="POLYGON_WS_HOST_REALTIME")
-    polygon_ws_host_delayed: str = Field(..., alias="POLYGON_WS_HOST_DELAYED")
-    polygon_ws_symbols: str = Field("AAPL,MSFT,TSLA", alias="POLYGON_WS_SYMBOLS")
+    # Feed code is auto-selected based on channel type (Feed.Business for AM/FMV, Feed.DelayedBusiness for T/Q)
+    polygon_ws_host_realtime: str | None = Field(None, alias="POLYGON_WS_HOST_REALTIME")  # Deprecated: SDK handles internally
+    polygon_ws_host_delayed: str | None = Field(None, alias="POLYGON_WS_HOST_DELAYED")  # Deprecated: SDK handles internally
+    polygon_ws_symbols: str = Field("", alias="POLYGON_WS_SYMBOLS")  # Deprecated: using wildcards now
 
     redis_url: str | None = Field(None, alias="REDIS_URL")
     redis_token: str | None = Field(None, alias="REDIS_TOKEN")
@@ -23,9 +24,10 @@ class Settings(BaseSettings):
     backoff_factor: float = Field(2.0, alias="BACKOFF_FACTOR")
     backoff_max_ms: int = Field(30000, alias="BACKOFF_MAX_MS")
 
-    # Ticker discovery and subscription behavior
-    polygon_discover_tickers: bool = Field(True, alias="POLYGON_DISCOVER_TICKERS")
-    polygon_ticker_limit: int = Field(0, alias="POLYGON_TICKER_LIMIT")  # 0 means unlimited
+    # Ticker discovery - DEPRECATED: Using wildcard subscriptions now
+    # Keeping for backward compatibility but not used
+    polygon_discover_tickers: bool = Field(False, alias="POLYGON_DISCOVER_TICKERS")
+    polygon_ticker_limit: int = Field(0, alias="POLYGON_TICKER_LIMIT")
     subscribe_batch_size: int = Field(500, alias="POLYGON_SUBSCRIBE_BATCH")
 
     # S3 cold-path configuration
@@ -68,8 +70,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_hosts(self):
-        if not self.polygon_ws_host_realtime or not self.polygon_ws_host_delayed:
-            raise ValueError("POLYGON_WS_HOST_REALTIME and POLYGON_WS_HOST_DELAYED are required")
+        # Hosts are optional now - Massive SDK handles connection internally
         if self.agg5m_flush_interval_sec <= 0:
             raise ValueError("AGG5M_FLUSH_INTERVAL_SEC must be > 0")
         if self.agg5m_max_bars <= 0:

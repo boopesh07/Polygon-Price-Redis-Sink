@@ -3,7 +3,6 @@ __all__ = [
     "logging_setup",
     "redis_sink",
     "ws_client",
-    "tickers",
     "agg5m",
     "quote_tracker",
 ]

@@ -9,18 +9,16 @@ import json
 import socket
 
 import httpx
-from redis.asyncio import Redis
 
 from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
 from .redis_sink import build_sink
 from .agg5m import Agg5mCollector
 from .quote_tracker import QuoteTracker
-from .ws_client import PolygonWsClient
-from .tickers import fetch_all_active_stock_tickers
+from .ws_client import MassiveWsClient
 
 
-async def _health_loop(client: PolygonWsClient, interval_sec: int) -> None:
+async def _health_loop(client: MassiveWsClient, interval_sec: int) -> None:
     logger = get_logger()
     while True:
         await asyncio.sleep(interval_sec)
@@ -80,19 +78,11 @@ async def _main_async() -> None:
     settings = Settings()
     configure_logging(debug=settings.ws_debug)
     logger = get_logger()
-    # Discover all active stock tickers
-    if settings.polygon_discover_tickers:
-        all_symbols = await fetch_all_active_stock_tickers(settings.polygon_api_key)
-    else:
-        all_symbols = settings.symbols
-    if settings.polygon_ticker_limit and settings.polygon_ticker_limit > 0:
-        all_symbols = all_symbols[: settings.polygon_ticker_limit]
-    logger.info("discovered_symbols", count=len(all_symbols))
+    
     logger.info(
-        "starting_polygon_sink",
-        realtime_host=settings.polygon_ws_host_realtime,
-        delayed_host=settings.polygon_ws_host_delayed,
-        symbols=all_symbols[:20],
+        "starting_massive_sink",
+        api_key_masked=mask_api_key(settings.polygon_api_key),
+        ws_debug=settings.ws_debug,
     )
 
     sink = build_sink(settings)
@@ -118,36 +108,33 @@ async def _main_async() -> None:
     if not ok_rw:
         raise RuntimeError("startup_redis_validation_failed")
 
-    # Build one or two clients depending on env overrides
-    # One client per host. Real-time host handles AM+FMV. Delayed host handles T+Q.
+    # Build two clients: one for real-time channels (AM+FMV), one for delayed (T+Q)
+    # Both use wildcard subscriptions (e.g., "AM.*", "T.*") to receive all tickers
     clients = []
-    # Real-time (business) host: AM + FMV
-    rt_url = settings.normalized_ws_url_for("AM")
+    
+    # Real-time client: AM (Aggregates) + FMV (Fair Market Value)
     clients.append(
-        PolygonWsClient(
+        MassiveWsClient(
             settings,
             sink,
             channels=["AM", "FMV"],
-            host_override=rt_url,
-            symbols_override=all_symbols,
             agg5m_collector=agg5m_collector,
             quote_tracker=quote_tracker,
         )
     )
 
-    # Delayed (delayed-business) host: T + Q
-    delayed_url = settings.normalized_ws_url_for("T")
+    # Delayed client: T (Trades) + Q (Quotes)
     clients.append(
-        PolygonWsClient(
+        MassiveWsClient(
             settings,
             sink,
             channels=["T", "Q"],
-            host_override=delayed_url,
-            symbols_override=all_symbols,
             agg5m_collector=agg5m_collector,
             quote_tracker=quote_tracker,
         )
     )
+    
+    logger.info("massive_clients_created", client_count=len(clients))
 
     stop_event = asyncio.Event()
 
@@ -174,7 +161,7 @@ async def _main_async() -> None:
             await t
     await agg5m_collector.close()
     await sink.close()
-    logger.info("stopped_polygon_sink")
+    logger.info("stopped_massive_sink")
 
 
 def main() -> None:
