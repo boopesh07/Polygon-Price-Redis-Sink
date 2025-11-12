@@ -4,11 +4,13 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
-import websockets
-from websockets.client import WebSocketClientProtocol
+from massive import WebSocketClient
+from massive.websocket.models import WebSocketMessage, Feed, Market
 
+from .agg5m import Agg5mCollector
 from .config import Settings, mask_api_key
 from .logging_setup import get_logger
+from .prev_close_recorder import PrevCloseRecorder
 from .redis_sink import BaseSink
 from .agg5m import Agg5mCollector
 from .fmv_tracker import FmvTracker
@@ -17,7 +19,27 @@ from .fmv_tracker import FmvTracker
 logger = get_logger()
 
 
-class PolygonWsClient:
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class MassiveWsClient:
+    """Massive WebSocket client that subscribes to AM, T, Q, and FMV channels."""
+
     def __init__(
         self,
         settings: Settings,
@@ -29,6 +51,9 @@ class PolygonWsClient:
     ):
         self._settings = settings
         self._sink = sink
+        self._channels = [c.upper() for c in channels]
+        self._agg5m = agg5m_collector
+        self._prev_close_recorder = prev_close_recorder
         self._stop_event = asyncio.Event()
         self._is_authenticated: bool = False
         self._trade_counts: Dict[str, Dict[str, int]] = {}
@@ -41,30 +66,57 @@ class PolygonWsClient:
         self._agg5m = agg5m_collector
         self._fmv_tracker = fmv_tracker
 
-    def _debug_log(self, direction: str, raw: str) -> None:
-        if self._debug:
-            snippet = raw[:1000]
-            logger.info(
-                "ws_debug",
-                direction=direction,
-                payload=snippet,
-            )
+        is_realtime = any(ch in ("AM", "FMV") for ch in self._channels)
+        self._feed = Feed.Business if is_realtime else Feed.DelayedBusiness
+        logger.info(
+            "massive_ws_client_init",
+            channels=self._channels,
+            feed=str(self._feed),
+            ws_debug=self._debug,
+        )
+
+    def _log_ws_request(self, action: str, params: str) -> None:
+        payload = mask_api_key(params) if action == "auth" else params
+        logger.info("ws_request", action=action, params=payload)
+
+    def _log_ws_response(self, msgs: List[Dict[str, Any]]) -> None:
+        if not msgs:
+            return
+        try:
+            preview = json.dumps(msgs)
+        except Exception:
+            preview = str(msgs)
+        snippet = preview[:1000]
+        logger.info("ws_response", payload_preview=snippet, payload_length=len(preview))
 
     async def run_forever(self) -> None:
-        backoff = self._settings.backoff_initial_ms / 1000.0
+        backoff = max(0.1, self._settings.backoff_initial_ms / 1000.0)
         while not self._stop_event.is_set():
             try:
                 await self._connect_and_run()
-                backoff = self._settings.backoff_initial_ms / 1000.0
+                backoff = max(0.1, self._settings.backoff_initial_ms / 1000.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.error("ws_loop_error", error=str(exc))
+                logger.error("ws_loop_error", error=str(exc), exc_info=True)
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * self._settings.backoff_factor, self._settings.backoff_max_ms / 1000.0)
+                backoff = min(
+                    backoff * max(1.0, self._settings.backoff_factor),
+                    max(0.1, self._settings.backoff_max_ms / 1000.0),
+                )
 
     async def stop(self) -> None:
+        logger.info("ws_stopping")
         self._stop_event.set()
+        if self._client and hasattr(self._client, "close"):
+            close_method = getattr(self._client, "close")
+            try:
+                if asyncio.iscoroutinefunction(close_method):
+                    await close_method()
+                else:
+                    close_method()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("ws_close_error", error=str(exc))
 
     async def _connect_and_run(self) -> None:
         # If running split hosts, choose the URL based on the first requested channel
@@ -100,28 +152,58 @@ class PolygonWsClient:
                 self._debug_log("in", raw_text)
                 await self._on_message(ws, raw_text)
 
-        done, pending = await asyncio.wait(
-            [asyncio.create_task(sender()), asyncio.create_task(receiver())],
-            return_when=asyncio.FIRST_COMPLETED,
+        self._event_loop = asyncio.get_event_loop()
+        self._client = WebSocketClient(
+            api_key=self._settings.polygon_api_key,
+            feed=self._feed,
+            market=Market.Stocks,
         )
-        for task in pending:
-            task.cancel()
 
-    async def _send_json_str(self, ws: WebSocketClientProtocol, obj: Dict[str, Any]) -> None:
-        payload = json.dumps(obj)
-        self._debug_log("out", payload)
-        await ws.send(payload)
+        subscriptions: List[str] = []
+        for ch in self._channels:
+            topic = f"{ch}.*"
+            subscriptions.append(topic)
+            self._log_ws_request("subscribe", topic)
+            self._client.subscribe(topic)
 
-    async def _on_message(self, ws: WebSocketClientProtocol, raw: str) -> None:
+        logger.info("ws_subscribed", count=len(subscriptions), subscriptions=subscriptions)
+        self._is_running = True
+
+        import concurrent.futures
+
         try:
-            parsed = json.loads(raw)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("ws_parse_error", error=str(exc))
-            return
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._client.run, handle_msg=self._handle_message_sync)
+                while not self._stop_event.is_set():
+                    if future.done():
+                        exc = future.exception()
+                        if exc:
+                            raise exc
+                        break
+                    await asyncio.sleep(0.1)
+        finally:
+            self._is_running = False
 
-        events: List[Dict[str, Any]] = parsed if isinstance(parsed, list) else [parsed]
-        for evt in events:
-            await self._handle_event(ws, evt)
+    def _handle_message_sync(self, msgs: List[WebSocketMessage]) -> None:
+        if not msgs:
+            return
+        try:
+            loop = self._event_loop or asyncio.get_event_loop()
+            asyncio.run_coroutine_threadsafe(self._handle_message(msgs), loop)
+        except RuntimeError:
+            logger.warning("ws_no_event_loop", msg_count=len(msgs))
+            asyncio.run(self._handle_message(msgs))
+
+    async def _handle_message(self, msgs: List[WebSocketMessage]) -> None:
+        payloads: List[Dict[str, Any]] = []
+        for msg in msgs:
+            if hasattr(msg, "dict"):
+                payloads.append(msg.dict())
+            elif hasattr(msg, "__dict__"):
+                payloads.append(msg.__dict__)
+            else:
+                payloads.append({"raw": str(msg)})
+        self._log_ws_response(payloads)
 
     async def _handle_event(self, ws: WebSocketClientProtocol, evt: Dict[str, Any]) -> None:
         if not evt:
@@ -143,59 +225,14 @@ class PolygonWsClient:
                 logger.error("ws_status_error", message=evt.get("message"))
             return
 
-        if evt.get("ev") == "T" and evt.get("sym") and isinstance(evt.get("p"), (int, float)):
-            sym = str(evt["sym"]).upper()
-            # Write trade-specific key only (no stock:latest)
-            # Richer record when available
-            trade_payload = {
-                "symbol": sym,
-                "price": float(evt["p"]),
-                "ts": int(evt["t"]) if isinstance(evt.get("t"), (int, float)) else None,
-                "size": int(evt["s"]) if isinstance(evt.get("s"), (int, float)) else None,
-                "conditions": evt.get("c"),
-                "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-            }
-            await self._sink.set_trade(sym, trade_payload)
-            # Emit raw NDJSON for S3 cold path
-            if hasattr(self._sink, "write_raw_event"):
-                try:
-                    await getattr(self._sink, "write_raw_event")("T", sym, evt)
-                except Exception:
-                    pass
-            c = self._trade_counts.get(sym) or {"count": 0}
-            c["count"] += 1
-            if isinstance(evt.get("t"), (int, float)):
-                c["lastTs"] = int(evt["t"])  # type: ignore[index]
-            self._trade_counts[sym] = c
+    async def _process_event(self, evt: Dict[str, Any]) -> None:
+        event_type = evt.get("event_type") or evt.get("ev")
+        if not event_type:
+            logger.debug("ws_event_missing_ev", raw_event=evt)
             return
 
-        if evt.get("ev") == "AM" and evt.get("sym"):
-            sym = str(evt["sym"]).upper()
-            bar = {
-                "symbol": sym,
-                "start": int(evt.get("s") or 0),
-                "end": int(evt.get("e") or 0),
-                "open": float(evt.get("o") or 0),
-                "high": float(evt.get("h") or 0),
-                "low": float(evt.get("l") or 0),
-                "close": float(evt.get("c") or 0),
-                "volume": int(evt.get("v") or 0),
-                "vwap": float(evt.get("a")) if isinstance(evt.get("a"), (int, float)) else None,
-                "updatedAt": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-            }
-            await self._sink.set_latest_agg1m(sym, bar)
-            if self._agg5m:
-                await self._agg5m.on_minute_bar(sym, bar)
-            if hasattr(self._sink, "write_raw_event"):
-                try:
-                    await getattr(self._sink, "write_raw_event")("AM", sym, evt)
-                except Exception:
-                    pass
-            c = self._agg_counts.get(sym) or {"count": 0}
-            c["count"] += 1
-            if isinstance(evt.get("e"), (int, float)):
-                c["lastTs"] = int(evt["e"])  # type: ignore[index]
-            self._agg_counts[sym] = c
+        if event_type.lower() == "status":
+            logger.info("ws_status_event", payload=evt)
             return
 
         # Quotes: Raw bid/ask data (NO P/L calculations - that's handled by FMV now)
@@ -240,6 +277,7 @@ class PolygonWsClient:
                 c["lastTs"] = int(evt["t"])  # type: ignore[index]
             self._quote_counts[sym] = c
             return
+        symbol = symbol_raw.upper()
 
         # FMV: Fair Market Value with P/L calculations
         if evt.get("ev") == "FMV" and evt.get("sym") and isinstance(evt.get("fmv"), (int, float)):
@@ -289,6 +327,10 @@ class PolygonWsClient:
                 c["lastTs"] = int(evt["t"])  # type: ignore[index]
             self._fmv_counts[sym] = c
             return
+        try:
+            await writer(channel, symbol, evt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("raw_event_write_failed", channel=channel, symbol=symbol, error=str(exc))
 
     def health(self) -> Dict[str, Any]:
         return {

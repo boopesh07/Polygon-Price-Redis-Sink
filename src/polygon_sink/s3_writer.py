@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import io
 import socket
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import boto3
+
+from .logging_setup import get_logger
+
+logger = get_logger()
 
 
 @dataclass
@@ -42,8 +45,8 @@ class WindowedS3Writer:
         self._current_window_end: Optional[datetime] = None
         self._seq_counter: int = 0
 
-        self._buffer = io.BytesIO()
-        self._upload_offset = 0
+        self._buffer = bytearray()
+        self._object_bytes_streamed = 0
         self._upload_id: Optional[str] = None
         self._parts: List[_UploadPart] = []
         self._object_key: Optional[str] = None
@@ -77,15 +80,15 @@ class WindowedS3Writer:
         self._current_window_start = start
         self._current_window_end = end
         self._object_key = key
-        self._buffer = io.BytesIO()
-        self._upload_offset = 0
+        self._buffer = bytearray()
+        self._object_bytes_streamed = 0
         self._parts.clear()
         if self.use_marker:
             marker = f"{prefix}/uploading.marker"
             try:
                 self.s3.put_object(Bucket=self.bucket, Key=marker, Body=b"")
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("s3_marker_write_failed", key=marker, error=str(exc))
         resp = self.s3.create_multipart_upload(
             Bucket=self.bucket,
             Key=key,
@@ -98,16 +101,14 @@ class WindowedS3Writer:
             return True
         if when > self._current_window_end:
             return True
-        if (self._buffer.tell() - self._upload_offset) + self._upload_offset >= self.max_object_bytes:
+        if self._object_bytes_streamed >= self.max_object_bytes:
             return True
         return False
 
     def _upload_available_parts(self) -> None:
-        while (self._buffer.tell() - self._upload_offset) >= self.part_size_bytes:
-            start = self._upload_offset
-            end = start + self.part_size_bytes
-            self._buffer.seek(start)
-            data = self._buffer.read(self.part_size_bytes)
+        while len(self._buffer) >= self.part_size_bytes:
+            data = bytes(self._buffer[: self.part_size_bytes])
+            del self._buffer[: self.part_size_bytes]
             part_num = len(self._parts) + 1
             resp = self.s3.upload_part(
                 Bucket=self.bucket,
@@ -117,28 +118,23 @@ class WindowedS3Writer:
                 Body=data,
             )
             self._parts.append(_UploadPart(part_number=part_num, etag=resp["ETag"]))
-            self._upload_offset = end
 
     def write_line(self, line: str) -> None:
         now = datetime.now(timezone.utc)
         if self._should_rotate(now):
             self._finalize_current()
             self._start_new_window(now)
-        if not line.endswith("\n"):
-            data = (line + "\n").encode("utf-8")
-        else:
-            data = line.encode("utf-8")
-        self._buffer.write(data)
+        data = (line + "\n").encode("utf-8") if not line.endswith("\n") else line.encode("utf-8")
+        self._buffer.extend(data)
+        self._object_bytes_streamed += len(data)
         self._upload_available_parts()
 
     def _finalize_current(self) -> None:
         if self._upload_id is None:
             return
         try:
-            remaining = self._buffer.tell() - self._upload_offset
-            if remaining > 0:
-                self._buffer.seek(self._upload_offset)
-                data = self._buffer.read(remaining)
+            if self._buffer:
+                data = bytes(self._buffer)
                 part_num = len(self._parts) + 1
                 resp = self.s3.upload_part(
                     Bucket=self.bucket,
@@ -155,22 +151,23 @@ class WindowedS3Writer:
                 UploadId=str(self._upload_id),
                 MultipartUpload=parts_payload,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.error("s3_finalize_failed", key=self._object_key, error=str(exc))
             try:
                 if self._upload_id:
                     self.s3.abort_multipart_upload(Bucket=self.bucket, Key=self._current_key(), UploadId=str(self._upload_id))
-            except Exception:
-                pass
+            except Exception as abort_exc:  # noqa: BLE001
+                logger.warning("s3_abort_failed", key=self._object_key, error=str(abort_exc))
         finally:
             if self.use_marker and self._current_window_start and self._current_window_end:
                 prefix = self._prefix_for_window(self._current_window_start, self._current_window_end)
                 marker = f"{prefix}/uploading.marker"
                 try:
                     self.s3.delete_object(Bucket=self.bucket, Key=marker)
-                except Exception:
-                    pass
-            self._buffer = io.BytesIO()
-            self._upload_offset = 0
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("s3_marker_delete_failed", key=marker, error=str(exc))
+            self._buffer = bytearray()
+            self._object_bytes_streamed = 0
             self._upload_id = None
             self._parts.clear()
             self._object_key = None
@@ -224,5 +221,3 @@ class S3RawMultiWriter:
     async def close(self) -> None:
         for w in self._writers.values():
             await w.close()
-
-

@@ -42,7 +42,7 @@ sed -e "s|<ACCOUNT_ID>|$ACCOUNT_ID|g" \
     -e "s|<AWS_REGION>|${AWS_DEFAULT_REGION}|g" \
     -e "s|\"S3_WINDOW_MINUTES\": \"30\"|\"S3_WINDOW_MINUTES\": \"${S3_WINDOW_MINUTES:-30}\"|g" \
     -e "s|\"S3_MAX_OBJECT_BYTES\": \"512000000\"|\"S3_MAX_OBJECT_BYTES\": \"${S3_MAX_OBJECT_BYTES:-512000000}\"|g" \
-    -e "s|\"S3_PART_SIZE_BYTES\": \"16777216\"|\"S3_PART_SIZE_BYTES\": \"${S3_PART_SIZE_BYTES:-16777216}\"|g" \
+    -e "s|\"S3_PART_SIZE_BYTES\": \"16777216\"|\"S3_PART_SIZE_BYTES\": \"${S3_PART_SIZE_BYTES:-33554432}\"|g" \
     -e "s|\"S3_USE_MARKER\": \"true\"|\"S3_USE_MARKER\": \"${S3_USE_MARKER:-true}\"|g" \
     ecs/task-def.json > /tmp/ecs-task-def.rendered.json
 

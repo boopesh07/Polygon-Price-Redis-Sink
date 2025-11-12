@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     aws_region: str | None = Field(None, alias="AWS_REGION")
     s3_window_minutes: int = Field(30, alias="S3_WINDOW_MINUTES")
     s3_max_object_bytes: int = Field(512_000_000, alias="S3_MAX_OBJECT_BYTES")
-    s3_part_size_bytes: int = Field(16_777_216, alias="S3_PART_SIZE_BYTES")
+    s3_part_size_bytes: int = Field(33_554_432, alias="S3_PART_SIZE_BYTES")
     s3_use_marker: bool = Field(True, alias="S3_USE_MARKER")
 
     # 5-minute aggregate settings
@@ -57,8 +57,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_hosts(self):
-        if not self.polygon_ws_host_realtime or not self.polygon_ws_host_delayed:
-            raise ValueError("POLYGON_WS_HOST_REALTIME and POLYGON_WS_HOST_DELAYED are required")
+        # Hosts are optional now - Massive SDK handles connection internally
         if self.agg5m_flush_interval_sec <= 0:
             raise ValueError("AGG5M_FLUSH_INTERVAL_SEC must be > 0")
         if self.agg5m_max_bars <= 0:

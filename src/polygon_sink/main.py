@@ -9,7 +9,6 @@ import json
 import socket
 
 import httpx
-from redis.asyncio import Redis
 
 from .config import Settings, mask_api_key
 from .logging_setup import configure_logging, get_logger
@@ -19,7 +18,7 @@ from .fmv_tracker import FmvTracker
 from .ws_client import PolygonWsClient
 
 
-async def _health_loop(client: PolygonWsClient, interval_sec: int) -> None:
+async def _health_loop(client: MassiveWsClient, interval_sec: int) -> None:
     logger = get_logger()
     while True:
         await asyncio.sleep(interval_sec)
@@ -97,10 +96,10 @@ async def _main_async() -> None:
     agg5m_collector.start()
     fmv_tracker = FmvTracker(
         sink,
-        settings.quote_pl_timezone,
-        settings.quote_pl_market_close_hour,
-        settings.quote_pl_market_close_minute,
-        settings.quote_prev_close_ttl_sec,
+        timezone_name=settings.quote_pl_timezone,
+        close_hour=settings.quote_pl_market_close_hour,
+        close_minute=settings.quote_pl_market_close_minute,
+        prev_close_ttl=settings.quote_prev_close_ttl_sec,
     )
     ok = await sink.ping()
     logger.info("redis_health", ok=ok)
@@ -109,13 +108,13 @@ async def _main_async() -> None:
     if not ok_rw:
         raise RuntimeError("startup_redis_validation_failed")
 
-    # Build one or two clients depending on env overrides
-    # One client per host. Real-time host handles AM+FMV. Delayed host handles T+Q.
+    # Build two clients: one for real-time channels (AM+FMV), one for delayed (T+Q)
+    # Both use wildcard subscriptions (e.g., "AM.*", "T.*") to receive all tickers
     clients = []
     # Real-time (business) host: AM + FMV (with P/L tracking)
     rt_url = settings.normalized_ws_url_for("AM")
     clients.append(
-        PolygonWsClient(
+        MassiveWsClient(
             settings,
             sink,
             channels=["AM", "FMV"],
@@ -128,7 +127,7 @@ async def _main_async() -> None:
     # Delayed (delayed-business) host: T + Q (raw data only, no trackers)
     delayed_url = settings.normalized_ws_url_for("T")
     clients.append(
-        PolygonWsClient(
+        MassiveWsClient(
             settings,
             sink,
             channels=["T", "Q"],
@@ -137,6 +136,8 @@ async def _main_async() -> None:
             fmv_tracker=None,
         )
     )
+    
+    logger.info("massive_clients_created", client_count=len(clients))
 
     stop_event = asyncio.Event()
 
@@ -163,7 +164,7 @@ async def _main_async() -> None:
             await t
     await agg5m_collector.close()
     await sink.close()
-    logger.info("stopped_polygon_sink")
+    logger.info("stopped_massive_sink")
 
 
 def main() -> None:

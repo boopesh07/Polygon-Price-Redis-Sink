@@ -1,9 +1,9 @@
 python-dotenv
-websockets
+massive
 redis
-httpx
-uvloop; platform_system!='Windows'
+upstash-redis
 structlog
+uvloop; platform_system!='Windows'
 pydantic
 pydantic-settings
 boto3

@@ -1,18 +1,21 @@
 import logging
-import os
 import sys
-import structlog
+
+try:
+    import structlog
+except ModuleNotFoundError:  # pragma: no cover - fallback for test environments
+    structlog = None  # type: ignore[assignment]
 
 
 def configure_logging(debug: bool = False) -> None:
-    timestamper = structlog.processors.TimeStamper(fmt="iso")
-
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=logging.DEBUG if debug else logging.INFO,
     )
-
+    if structlog is None:
+        return
+    timestamper = structlog.processors.TimeStamper(fmt="iso")
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -31,7 +34,6 @@ def configure_logging(debug: bool = False) -> None:
 
 
 def get_logger():
-    return structlog.get_logger()
-
-
-
+    if structlog is None:
+        return logging.getLogger("polygon_sink")
+    return structlog.get_logger("polygon_sink")

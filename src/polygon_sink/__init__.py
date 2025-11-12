@@ -3,9 +3,8 @@ __all__ = [
     "logging_setup",
     "redis_sink",
     "ws_client",
-    "tickers",
     "agg5m",
-    "quote_tracker",
+    "prev_close_recorder",
 ]
 
 __version__ = "0.1.0"
