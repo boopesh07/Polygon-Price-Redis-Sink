@@ -176,7 +176,7 @@ class Agg5mCollector:
     def _build_payload(self, state: _SymbolState) -> Dict[str, Any]:
         return {
             "day": state.day_key,
-            "bars": [{"ts": ts, "close": close} for ts, close in state.buckets],
+            "bars": [{"date": ts, "value": close} for ts, close in state.buckets],
         }
 
     def _extract_start_ms(self, bar: Dict[str, Any]) -> Optional[int]:
